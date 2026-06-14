@@ -8,12 +8,14 @@ import {
   getTasks, addTask, updateTask, deleteTask, setTasks,
   getBlocks,
   get, set,
-  getYearlyThemes, setMonthTheme,
+  getYearlyThemes, setMonthTheme, setMonthGoals,
   generateId, todayKey, dateKey,
   snapHour,
+  getCustomCategories, addCustomCategory, deleteCustomCategory, renameCustomCategory,
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
+import { showConfirm, showAlert } from '../shared/dialog.js';
 
 // ─── Date helpers ──────────────────────────────────────────────────────────────
 function isoDate(d) { return d.toISOString().slice(0, 10); }
@@ -72,6 +74,7 @@ let currentMonth     = new Date().getMonth(); // 0-indexed
 let activeCat        = 'Deep Work';
 let selectedPriority = 1;
 let activeTab        = 'day';
+let collapsedCategories = [];
 
 let timeboardInstance = null;
 
@@ -91,7 +94,7 @@ tabBtns.forEach((btn) => {
   });
 });
 
-function switchTab(tab) {
+async function switchTab(tab) {
   activeTab = tab;
   tabBtns.forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   Object.entries(tabPanels).forEach(([key, el]) => {
@@ -102,8 +105,9 @@ function switchTab(tab) {
   if (tab === 'day') {
     mountDayBoard();
     renderDayDate();
-    renderPriorityList();
-    loadNotes();
+    await populateCategoryDropdowns();
+    await renderPriorityList();
+    await loadNotes();
   } else if (tab === 'week') {
     renderWeekTab();
   } else if (tab === 'month') {
@@ -182,15 +186,19 @@ function mountDayBoard() {
   });
 }
 
-// ── Priority list ───────────────────────────────────────────────────────────
+// ── Priority list & Categories ──────────────────────────────────────────────
 
 const priorityList      = document.getElementById('priority-list');
 const priorityTaskCount = document.getElementById('priority-task-count');
 const priorityInput     = document.getElementById('priority-input');
 const btnAddPriority    = document.getElementById('btn-add-priority');
+const categoryFilter    = document.getElementById('priority-category-filter');
+const quickAddCatInput  = document.getElementById('quick-add-category-input');
+
+// Category filter state
+let activeCategoryFilter = 'all';
 
 // Priority dot selector
-let editingTaskId = null;
 document.querySelectorAll('.priority-dot-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.priority-dot-btn').forEach((b) => b.classList.remove('active'));
@@ -199,8 +207,40 @@ document.querySelectorAll('.priority-dot-btn').forEach((btn) => {
   });
 });
 
+// Populate Category selects/dropdowns
+async function populateCategoryDropdowns() {
+  const categories = await getCustomCategories();
+  
+  // Populate filter dropdown
+  const currentFilterVal = categoryFilter.value || 'all';
+  categoryFilter.innerHTML = `<option value="all">All Categories</option>` + 
+    categories.map(cat => `<option value="${escHtml(cat)}">${escHtml(cat)}</option>`).join('');
+  categoryFilter.value = currentFilterVal;
+
+  // Populate quick add dropdown
+  const currentQuickAddVal = quickAddCatInput.value || 'Personal';
+  quickAddCatInput.innerHTML = categories.map(cat => `<option value="${escHtml(cat)}">${escHtml(cat)}</option>`).join('');
+  quickAddCatInput.value = categories.includes(currentQuickAddVal) ? currentQuickAddVal : categories[0] || 'Personal';
+
+  // Populate task modal dropdown
+  const taskCategoryInput = document.getElementById('task-category-input');
+  const currentModalVal = taskCategoryInput.value || 'Personal';
+  taskCategoryInput.innerHTML = categories.map(cat => `<option value="${escHtml(cat)}">${escHtml(cat)}</option>`).join('');
+  taskCategoryInput.value = categories.includes(currentModalVal) ? currentModalVal : categories[0] || 'Personal';
+}
+
+categoryFilter.addEventListener('change', () => {
+  activeCategoryFilter = categoryFilter.value;
+  renderPriorityList();
+});
+
 async function renderPriorityList() {
   const tasks = await getTasks(currentDate);
+  // Update progress card
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter(t => t.done).length;
+  updateDailyProgressCard(totalTasks, completedTasks);
+
   // Sort: priority asc, then undone before done
   const sorted = [...tasks].sort((a, b) => {
     if (a.done !== b.done) return a.done ? 1 : -1;
@@ -210,34 +250,158 @@ async function renderPriorityList() {
   const pCount = tasks.filter((t) => !t.done).length;
   priorityTaskCount.textContent = `${pCount} pending`;
 
-  if (sorted.length === 0) {
-    priorityList.innerHTML = `<div style="font-size:13px;color:var(--color-text-muted);padding:8px 0;font-style:italic;">No tasks yet — add one below</div>`;
+  const categories = await getCustomCategories();
+  
+  // Group tasks by category
+  const grouped = {};
+  categories.forEach(cat => {
+    grouped[cat] = [];
+  });
+  // Fallbacks
+  grouped['Personal'] = grouped['Personal'] || [];
+  grouped['Other'] = grouped['Other'] || [];
+
+  for (const t of sorted) {
+    const cat = t.category || 'Personal';
+    if (!grouped[cat]) {
+      grouped[cat] = [];
+    }
+    grouped[cat].push(t);
+  }
+
+  // Generate html sections for categories
+  let html = '';
+  let renderedCount = 0;
+
+  for (const cat of Object.keys(grouped)) {
+    const catTasks = grouped[cat];
+    if (catTasks.length === 0) continue;
+    if (activeCategoryFilter !== 'all' && activeCategoryFilter !== cat) continue;
+
+    renderedCount += catTasks.length;
+    const pendingCount = catTasks.filter(t => !t.done).length;
+    const isCollapsed = collapsedCategories.includes(cat);
+
+    html += `
+      <div class="category-group" data-category="${escHtml(cat)}">
+        <div class="category-group-header" data-cat="${escHtml(cat)}" style="cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="category-group-chevron" style="display: inline-flex; align-items: center; transition: transform 0.2s; transform: ${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'};">
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </span>
+            <span class="category-group-title">${escHtml(cat)}</span>
+          </div>
+          <span class="category-group-badge ${pendingCount > 0 ? 'active' : ''}">${pendingCount}</span>
+        </div>
+        <div class="category-group-list" style="display: ${isCollapsed ? 'none' : 'block'};">
+          ${catTasks.map((t) => `
+            <div class="priority-item-container" style="border-bottom: 1px solid var(--color-border); padding: 7px 0; display: flex; flex-direction: column;">
+              <div class="priority-item" data-id="${t.id}" draggable="true" style="border-bottom: none; padding: 0; cursor: grab;">
+                <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
+                <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
+                <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
+                ${t.timeEstimate ? `<span class="priority-item-est">${t.timeEstimate}m</span>` : ''}
+                <div class="priority-item-delete" data-id="${t.id}" title="Delete">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2.5"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6"/><path d="M14 11v6"/>
+                  </svg>
+                </div>
+              </div>
+              ${t.subtasks && t.subtasks.length > 0 ? `
+                <div class="subtasks-list" style="margin-left: 28px; margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
+                  ${t.subtasks.map(sub => `
+                    <div class="subtask-item" draggable="true" data-task-id="${t.id}" data-sub-id="${sub.id}" style="display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: grab;">
+                      <input type="checkbox" class="subtask-item-check" data-task-id="${t.id}" data-sub-id="${sub.id}" ${sub.done ? 'checked' : ''} style="width: 12px; height: 12px; accent-color: var(--color-accent); cursor: pointer;" />
+                      <span class="subtask-title-text${sub.done ? ' done-text' : ''}" style="font-size: 12px; color: var(--color-text);">${escHtml(sub.title)}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : ''}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  if (renderedCount === 0) {
+    priorityList.innerHTML = `<div style="font-size:13px;color:var(--color-text-muted);padding:12px;text-align:center;font-style:italic;">No tasks today — add one below</div>`;
     return;
   }
 
-  priorityList.innerHTML = sorted.map((t) => `
-    <div class="priority-item" data-id="${t.id}">
-      <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
-      <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
-      <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
-      ${t.timeEstimate ? `<span class="priority-item-est">${t.timeEstimate}m</span>` : ''}
-      <div class="priority-item-delete" data-id="${t.id}" title="Delete">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="2.5"
-             stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="3 6 5 6 21 6"/>
-          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-          <path d="M10 11v6"/><path d="M14 11v6"/>
-        </svg>
-      </div>
-    </div>
-  `).join('');
+  priorityList.innerHTML = html;
+
+  // Collapse toggle
+  priorityList.querySelectorAll('.category-group-header').forEach((hdr) => {
+    hdr.addEventListener('click', async () => {
+      const cat = hdr.dataset.cat;
+      if (collapsedCategories.includes(cat)) {
+        collapsedCategories = collapsedCategories.filter(c => c !== cat);
+      } else {
+        collapsedCategories.push(cat);
+      }
+      await set('collapsed_categories', collapsedCategories);
+      await renderPriorityList();
+    });
+  });
 
   // Checkbox toggle
   priorityList.querySelectorAll('.priority-item-check').forEach((cb) => {
     cb.addEventListener('change', async () => {
-      await updateTask(currentDate, cb.dataset.id, { done: cb.checked });
+      const isChecked = cb.checked;
+      const taskId = cb.dataset.id;
+      const tasks = await getTasks(currentDate);
+      
+      const totalBefore = tasks.length;
+      const completedBefore = tasks.filter(t => t.done).length;
+
+      await updateTask(currentDate, taskId, { done: isChecked });
+      
+      const updatedTasks = await getTasks(currentDate);
+      const completedAfter = updatedTasks.filter(t => t.done).length;
+      
+      if (isChecked && completedAfter === totalBefore && completedBefore < totalBefore && totalBefore > 0) {
+        triggerConfettiCelebration();
+      }
+
       await renderPriorityList();
+    });
+  });
+
+  // Subtask checkbox toggles
+  priorityList.querySelectorAll('.subtask-item-check').forEach((cb) => {
+    cb.addEventListener('change', async () => {
+      const taskId = cb.dataset.taskId;
+      const subId = cb.dataset.subId;
+      const isChecked = cb.checked;
+      const tasks = await getTasks(currentDate);
+      
+      const totalBefore = tasks.length;
+      const completedBefore = tasks.filter(t => t.done).length;
+
+      const t = tasks.find(x => x.id === taskId);
+      if (t && t.subtasks) {
+        const sub = t.subtasks.find(s => s.id === subId);
+        if (sub) {
+          sub.done = isChecked;
+          await updateTask(currentDate, taskId, { subtasks: t.subtasks });
+          
+          const updatedTasks = await getTasks(currentDate);
+          const completedAfter = updatedTasks.filter(t => t.done).length;
+          
+          if (isChecked && completedAfter === totalBefore && completedBefore < totalBefore && totalBefore > 0) {
+            triggerConfettiCelebration();
+          }
+
+          await renderPriorityList();
+        }
+      }
     });
   });
 
@@ -257,17 +421,59 @@ async function renderPriorityList() {
       await renderPriorityList();
     });
   });
+
+  // Dragstart binding
+  priorityList.querySelectorAll('.priority-item').forEach((item) => {
+    item.addEventListener('dragstart', (e) => {
+      const taskId = item.dataset.id;
+      const task = sorted.find(t => t.id === taskId);
+      if (task) {
+        e.dataTransfer.setData('text/plain', JSON.stringify({
+          id: task.id,
+          title: task.title,
+          category: task.category,
+          timeEstimate: task.timeEstimate
+        }));
+        e.dataTransfer.effectAllowed = 'copyMove';
+      }
+    });
+  });
+
+  // Subtask dragstart binding
+  priorityList.querySelectorAll('.subtask-item').forEach((item) => {
+    item.addEventListener('dragstart', (e) => {
+      e.stopPropagation(); // Avoid triggering parent task drag
+      const taskId = item.dataset.taskId;
+      const subId = item.dataset.subId;
+      const task = sorted.find(t => t.id === taskId);
+      if (task && task.subtasks) {
+        const sub = task.subtasks.find(s => s.id === subId);
+        if (sub) {
+          e.dataTransfer.setData('text/plain', JSON.stringify({
+            id: sub.id,
+            parentId: task.id,
+            title: `${task.title} — ${sub.title}`,
+            category: task.category,
+            timeEstimate: 30 // Subtasks default to 30 mins
+          }));
+          e.dataTransfer.effectAllowed = 'copyMove';
+        }
+      }
+    });
+  });
 }
 
 async function addPriorityTask() {
   const title = priorityInput.value.trim();
   if (!title) return;
+  const category = quickAddCatInput.value;
   await addTask(currentDate, {
     id: generateId(),
     title,
     done: false,
     priority: selectedPriority,
     timeEstimate: null,
+    category,
   });
   priorityInput.value = '';
   await renderPriorityList();
@@ -287,41 +493,132 @@ const btnTaskSave      = document.getElementById('btn-task-save');
 const btnTaskDelete    = document.getElementById('btn-task-delete');
 const taskTitleInput   = document.getElementById('task-title-input');
 const taskPriorityInput= document.getElementById('task-priority-input');
+const taskCategoryInput= document.getElementById('task-category-input');
 const taskEstimateInput= document.getElementById('task-estimate-input');
 
-let editingTask = null;
+// Subtasks modal selectors
+const taskSubtaskInput = document.getElementById('task-subtask-input');
+const btnAddSubtask    = document.getElementById('btn-add-subtask');
+const modalSubtasksList= document.getElementById('modal-subtasks-list');
+const subtaskProgress  = document.getElementById('subtask-progress');
 
-function openTaskModal(task = null) {
+let editingTask = null;
+let editingSubtasks = [];
+let editingTaskDate = null;
+
+function openTaskModal(task = null, date = null) {
   editingTask = task;
+  editingTaskDate = date;
+  editingSubtasks = task?.subtasks ? JSON.parse(JSON.stringify(task.subtasks)) : [];
   taskModalTitle.textContent = task ? 'Edit Task' : 'Add Task';
   taskTitleInput.value    = task?.title       ?? '';
   taskPriorityInput.value = String(task?.priority ?? 1);
+  taskCategoryInput.value = task?.category || 'Personal';
   taskEstimateInput.value = task?.timeEstimate ?? '';
+  taskSubtaskInput.value = '';
+  
   btnTaskDelete.classList.toggle('hidden', !task);
   taskModalOverlay.classList.remove('hidden');
   taskTitleInput.focus();
+  renderModalSubtasks();
 }
+
+function renderModalSubtasks() {
+  const total = editingSubtasks.length;
+  const done = editingSubtasks.filter(s => s.done).length;
+  subtaskProgress.textContent = `${done}/${total}`;
+
+  modalSubtasksList.innerHTML = editingSubtasks.map((sub, idx) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 6px; background: var(--color-bg); border-radius: 4px; font-size: 12px; gap: 6px;">
+      <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+        <input type="checkbox" class="modal-subtask-check" data-idx="${idx}" ${sub.done ? 'checked' : ''} style="width: 13px; height: 13px; cursor: pointer; accent-color: var(--color-accent);" />
+        <span class="${sub.done ? 'done-text' : ''}" style="color: var(--color-text); word-break: break-all;">${escHtml(sub.title)}</span>
+      </div>
+      <button type="button" class="btn btn-ghost btn-xs delete-subtask-btn" data-idx="${idx}" style="color: var(--color-danger); padding: 2px; height: auto;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  `).join('');
+
+  // Bind checkbox change
+  modalSubtasksList.querySelectorAll('.modal-subtask-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const idx = parseInt(cb.dataset.idx, 10);
+      editingSubtasks[idx].done = cb.checked;
+      renderModalSubtasks();
+    });
+  });
+
+  // Bind delete button click
+  modalSubtasksList.querySelectorAll('.delete-subtask-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      editingSubtasks.splice(idx, 1);
+      renderModalSubtasks();
+    });
+  });
+}
+
+function addSubtaskFromInput() {
+  const title = taskSubtaskInput.value.trim();
+  if (!title) return;
+  editingSubtasks.push({
+    id: generateId(),
+    title,
+    done: false
+  });
+  taskSubtaskInput.value = '';
+  renderModalSubtasks();
+  taskSubtaskInput.focus();
+}
+
+btnAddSubtask.addEventListener('click', addSubtaskFromInput);
+taskSubtaskInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addSubtaskFromInput();
+  }
+});
 
 function closeTaskModal() {
   taskModalOverlay.classList.add('hidden');
   editingTask = null;
+  editingTaskDate = null;
 }
 
 async function saveTask() {
   const title = taskTitleInput.value.trim();
   if (!title) { taskTitleInput.focus(); return; }
   const priority    = parseInt(taskPriorityInput.value, 10) || 1;
+  const category    = taskCategoryInput.value;
   const timeEstimate= parseInt(taskEstimateInput.value, 10) || null;
+  const subtasks    = editingSubtasks;
+
+  const targetDate = editingTaskDate || currentDate;
 
   if (editingTask) {
-    await updateTask(currentDate, editingTask.id, { title, priority, timeEstimate });
+    await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks });
   } else {
-    await addTask(currentDate, {
-      id: generateId(), title, done: false, priority, timeEstimate,
+    await addTask(targetDate, {
+      id: generateId(), title, done: false, priority, timeEstimate, category, subtasks,
     });
   }
   closeTaskModal();
-  await renderPriorityList();
+  await refreshActiveTab();
+}
+
+async function refreshActiveTab() {
+  if (activeTab === 'day') {
+    await renderPriorityList();
+  } else if (activeTab === 'week') {
+    await renderWeekTab();
+  } else if (activeTab === 'month') {
+    await renderMonthTab();
+  } else if (activeTab === 'year') {
+    await renderYearTab();
+  }
 }
 
 taskModalClose.addEventListener('click', closeTaskModal);
@@ -330,15 +627,162 @@ btnTaskSave.addEventListener('click', saveTask);
 taskModalOverlay.addEventListener('click', (e) => { if (e.target === taskModalOverlay) closeTaskModal(); });
 btnTaskDelete.addEventListener('click', async () => {
   if (!editingTask) return;
-  await deleteTask(currentDate, editingTask.id);
+  const targetDate = editingTaskDate || currentDate;
+  await deleteTask(targetDate, editingTask.id);
   closeTaskModal();
-  await renderPriorityList();
+  await refreshActiveTab();
 });
 taskTitleInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); saveTask(); }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !taskModalOverlay.classList.contains('hidden')) closeTaskModal();
+});
+
+// ── Categories management modal ─────────────────────────────────────────────
+const btnManageCategories = document.getElementById('btn-manage-categories');
+const categoriesModalOverlay = document.getElementById('categories-modal-overlay');
+const categoriesModalClose = document.getElementById('categories-modal-close');
+const btnAddCustomCategory = document.getElementById('btn-add-custom-category');
+const newCategoryInput = document.getElementById('new-category-input');
+const manageCategoriesList = document.getElementById('manage-categories-list');
+
+async function renderManageCategoriesList() {
+  const categories = await getCustomCategories();
+  
+  manageCategoriesList.innerHTML = categories.map(cat => {
+    return `
+      <div class="manage-cat-item" data-cat="${escHtml(cat)}" style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid var(--color-border); font-size: 13px; gap: 8px;">
+        <div class="cat-display-mode" style="display: flex; align-items: center; justify-content: space-between; flex: 1; width: 100%;">
+          <span class="cat-name-span" style="font-weight: 500;">${escHtml(cat)}</span>
+          <div style="display: flex; gap: 4px;">
+            <button class="btn btn-ghost btn-xs edit-cat-btn" data-cat="${escHtml(cat)}" style="color: var(--color-text-muted); padding: 2px; height: auto;" title="Rename">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
+            <button class="btn btn-ghost btn-xs delete-cat-btn" data-cat="${escHtml(cat)}" style="color: var(--color-danger); padding: 2px; height: auto;" title="Delete">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="cat-edit-mode hidden" style="display: flex; gap: 4px; flex: 1; width: 100%;">
+          <input type="text" class="input input-sm edit-cat-input" value="${escHtml(cat)}" style="height: 24px; font-size: 12px; flex: 1; padding: 2px 6px;" maxlength="30" />
+          <button class="btn btn-primary btn-xs save-cat-btn" data-cat="${escHtml(cat)}" style="padding: 2px 6px; font-size: 10px; height: 24px;">Save</button>
+          <button class="btn btn-secondary btn-xs cancel-cat-btn" style="padding: 2px 6px; font-size: 10px; height: 24px;">Esc</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Attach display mode / edit mode toggle
+  manageCategoriesList.querySelectorAll('.manage-cat-item').forEach(item => {
+    const displayMode = item.querySelector('.cat-display-mode');
+    const editMode = item.querySelector('.cat-edit-mode');
+    const editInput = item.querySelector('.edit-cat-input');
+    const editBtn = item.querySelector('.edit-cat-btn');
+    const cancelBtn = item.querySelector('.cancel-cat-btn');
+    const saveBtn = item.querySelector('.save-cat-btn');
+    const oldCatName = item.dataset.cat;
+
+    editBtn.addEventListener('click', () => {
+      displayMode.classList.add('hidden');
+      editMode.classList.remove('hidden');
+      editInput.focus();
+      editInput.select();
+    });
+
+    cancelBtn.addEventListener('click', () => {
+      editMode.classList.add('hidden');
+      displayMode.classList.remove('hidden');
+      editInput.value = oldCatName;
+    });
+
+    const triggerRename = async () => {
+      const newCatName = editInput.value.trim();
+      if (!newCatName || newCatName === oldCatName) {
+        cancelBtn.click();
+        return;
+      }
+      const success = await renameCustomCategory(oldCatName, newCatName);
+      if (success) {
+        await populateCategoryDropdowns();
+        await renderManageCategoriesList();
+        await renderPriorityList();
+      } else {
+        showAlert('Category name already exists or is invalid.', 'Invalid Category Name');
+      }
+    };
+
+    saveBtn.addEventListener('click', triggerRename);
+    editInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        triggerRename();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelBtn.click();
+      }
+    });
+  });
+
+  // Attach delete events
+  manageCategoriesList.querySelectorAll('.delete-cat-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const catToDelete = btn.dataset.cat;
+      const isConfirmed = await showConfirm(
+        `Are you sure you want to delete the category "${catToDelete}"? (Tasks in this category will display under "Personal")`,
+        'Delete Category'
+      );
+      if (isConfirmed) {
+        await deleteCustomCategory(catToDelete);
+        await populateCategoryDropdowns();
+        await renderManageCategoriesList();
+        await renderPriorityList();
+      }
+    });
+  });
+}
+
+btnManageCategories.addEventListener('click', () => {
+  renderManageCategoriesList();
+  categoriesModalOverlay.classList.remove('hidden');
+});
+
+categoriesModalClose.addEventListener('click', () => {
+  categoriesModalOverlay.classList.add('hidden');
+});
+
+categoriesModalOverlay.addEventListener('click', (e) => {
+  if (e.target === categoriesModalOverlay) {
+    categoriesModalOverlay.classList.add('hidden');
+  }
+});
+
+async function handleAddCategory() {
+  const catName = newCategoryInput.value.trim();
+  if (!catName) return;
+  const success = await addCustomCategory(catName);
+  if (success) {
+    newCategoryInput.value = '';
+    await populateCategoryDropdowns();
+    await renderManageCategoriesList();
+    await renderPriorityList();
+  } else {
+    showAlert('Category name already exists or is invalid.', 'Invalid Category Name');
+  }
+}
+
+btnAddCustomCategory.addEventListener('click', handleAddCategory);
+newCategoryInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    handleAddCategory();
+  }
 });
 
 // ── Notes ───────────────────────────────────────────────────────────────────
@@ -402,6 +846,21 @@ async function renderWeekTab() {
   // Load tasks for all 7 days in parallel
   const tasksByDay = await Promise.all(dates.map((d) => getTasks(d)));
 
+  // Calculate and update weekly progress
+  let totalWeeklyTasks = 0;
+  let completedWeeklyTasks = 0;
+  tasksByDay.forEach(dayTasks => {
+    totalWeeklyTasks += dayTasks.length;
+    completedWeeklyTasks += dayTasks.filter(t => t.done).length;
+  });
+  const weeklyPercent = totalWeeklyTasks > 0 ? Math.round((completedWeeklyTasks / totalWeeklyTasks) * 100) : 0;
+  const weekProgressText = document.getElementById('week-progress-text');
+  const weekProgressBarFill = document.getElementById('week-progress-bar-fill');
+  if (weekProgressText && weekProgressBarFill) {
+    weekProgressText.textContent = `Progress: ${weeklyPercent}% (${completedWeeklyTasks}/${totalWeeklyTasks})`;
+    weekProgressBarFill.style.width = `${weeklyPercent}%`;
+  }
+
   weekGrid.innerHTML = '';
 
   const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -418,10 +877,19 @@ async function renderWeekTab() {
     const hdrClass = `week-col-header${isToday ? ' is-today' : ''}`;
     const numClass = `week-day-num${isToday ? ' is-today-num' : ''}`;
 
+    const dayTotal = tasks.length;
+    const dayCompleted = tasks.filter(t => t.done).length;
+    const dayPercent = dayTotal > 0 ? Math.round((dayCompleted / dayTotal) * 100) : 0;
+
     col.innerHTML = `
       <div class="${hdrClass}" data-date="${date}">
         <span class="week-day-name">${DAY_LABELS[i]}</span>
         <span class="${numClass}">${dateNum}</span>
+        ${dayTotal > 0 ? `
+          <div class="week-day-progress-bar-bg" title="${dayCompleted} of ${dayTotal} tasks completed">
+            <div class="week-day-progress-bar-fill ${dayPercent === 100 ? 'completed' : ''}" style="width: ${dayPercent}%"></div>
+          </div>
+        ` : ''}
       </div>
       <div class="week-task-list" id="wt-${date}"></div>
       <div class="week-add-row">
@@ -434,6 +902,43 @@ async function renderWeekTab() {
     col.querySelector('.week-col-header').addEventListener('click', () => {
       currentDate = date;
       goToDay(date);
+    });
+
+    // Drag-and-drop column listeners
+    col.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      col.classList.add('drag-over');
+    });
+
+    col.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      col.classList.add('drag-over');
+    });
+
+    col.addEventListener('dragleave', () => {
+      col.classList.remove('drag-over');
+    });
+
+    col.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      try {
+        const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+        if (data && data.id && data.sourceDate) {
+          const targetDate = date;
+          if (data.sourceDate === targetDate) return;
+
+          const sourceTasks = await getTasks(data.sourceDate);
+          const taskToMove = sourceTasks.find(t => t.id === data.id);
+          if (taskToMove) {
+            await deleteTask(data.sourceDate, data.id);
+            await addTask(targetDate, taskToMove);
+            renderWeekTab();
+          }
+        }
+      } catch (err) {
+        console.error('Drag and drop error:', err);
+      }
     });
 
     weekGrid.appendChild(col);
@@ -478,10 +983,32 @@ function renderWeekTaskList(tasks, date, container) {
   });
 
   container.innerHTML = sorted.map((t) => `
-    <div class="week-task-item" data-id="${t.id}">
+    <div class="week-task-item" data-id="${t.id}" data-date="${date}" draggable="true">
       <input type="checkbox" class="week-task-check" data-id="${t.id}" data-date="${date}" ${t.done ? 'checked' : ''} />
-      <span class="week-task-title${t.done ? ' done-text' : ''}">${escHtml(t.title)}</span>
-      ${!t.done ? `<button class="week-carry-btn" data-id="${t.id}" data-date="${date}" title="Carry to next day">→</button>` : ''}
+      <span class="week-task-title${t.done ? ' done-text' : ''}" data-id="${t.id}" data-date="${date}">${escHtml(t.title)}</span>
+      <div class="week-task-actions">
+        ${!t.done ? `
+          <button class="week-action-btn carry" data-id="${t.id}" data-date="${date}" title="Carry to next day">
+            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+            </svg>
+          </button>
+        ` : ''}
+        <button class="week-action-btn edit" data-id="${t.id}" data-date="${date}" title="Edit task">
+          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4z"/>
+          </svg>
+        </button>
+        <button class="week-action-btn delete" data-id="${t.id}" data-date="${date}" title="Delete task">
+          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/>
+            <line x1="14" y1="11" x2="14" y2="17"/>
+          </svg>
+        </button>
+      </div>
     </div>
   `).join('');
 
@@ -493,8 +1020,35 @@ function renderWeekTaskList(tasks, date, container) {
     });
   });
 
+  // Title click opens edit modal
+  container.querySelectorAll('.week-task-title').forEach((titleEl) => {
+    titleEl.addEventListener('click', () => {
+      const task = sorted.find((x) => x.id === titleEl.dataset.id);
+      if (task) openTaskModal(task, titleEl.dataset.date);
+    });
+  });
+
+  // Edit button
+  container.querySelectorAll('.week-action-btn.edit').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const task = sorted.find((x) => x.id === btn.dataset.id);
+      if (task) openTaskModal(task, btn.dataset.date);
+    });
+  });
+
+  // Delete button
+  container.querySelectorAll('.week-action-btn.delete').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const isConfirmed = await showConfirm('Are you sure you want to delete this task?', 'Delete Task');
+      if (isConfirmed) {
+        await deleteTask(btn.dataset.date, btn.dataset.id);
+        renderWeekTab();
+      }
+    });
+  });
+
   // Carry forward
-  container.querySelectorAll('.week-carry-btn').forEach((btn) => {
+  container.querySelectorAll('.week-action-btn.carry').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const fromDate = btn.dataset.date;
       const d = new Date(fromDate + 'T12:00:00');
@@ -508,6 +1062,21 @@ function renderWeekTaskList(tasks, date, container) {
       }
     });
   });
+
+  // Drag listeners
+  container.querySelectorAll('.week-task-item').forEach((item) => {
+    item.addEventListener('dragstart', (e) => {
+      const taskId = item.dataset.id;
+      const sourceDate = item.dataset.date;
+      e.dataTransfer.setData('text/plain', JSON.stringify({ id: taskId, sourceDate }));
+      e.dataTransfer.effectAllowed = 'move';
+      item.classList.add('dragging');
+    });
+
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+    });
+  });
 }
 
 async function weekQuickAdd(date, title) {
@@ -519,10 +1088,20 @@ async function weekQuickAdd(date, title) {
 //     MONTH TAB
 // ══════════════════════════════════════════════════════════
 
-const monthGrid     = document.getElementById('month-grid');
-const monthNavTitle = document.getElementById('month-nav-title');
-const btnPrevMonth  = document.getElementById('btn-prev-month');
-const btnNextMonth  = document.getElementById('btn-next-month');
+const monthGrid       = document.getElementById('month-grid');
+const monthNavTitle   = document.getElementById('month-nav-title');
+const btnPrevMonth    = document.getElementById('btn-prev-month');
+const btnNextMonth    = document.getElementById('btn-next-month');
+
+// New Month Tab selectors
+const monthStatsBanner   = document.getElementById('month-stats-banner');
+const monthGoalsSidebar  = document.getElementById('month-goals-sidebar');
+const monthGoalsList     = document.getElementById('month-goals-list');
+const monthGoalInput     = document.getElementById('month-goal-input');
+const btnAddMonthGoal    = document.getElementById('btn-add-month-goal');
+const monthHoverPreview  = document.getElementById('month-hover-preview');
+
+let tooltipTimeout = null;
 
 btnPrevMonth.addEventListener('click', () => {
   currentMonth--;
@@ -535,6 +1114,156 @@ btnNextMonth.addEventListener('click', () => {
   if (currentMonth > 11) { currentMonth = 0; currentYear++; }
   renderMonthTab();
 });
+
+// Sidebar goals interactions
+btnAddMonthGoal.addEventListener('click', addMonthGoal);
+monthGoalInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addMonthGoal();
+  }
+});
+
+async function addMonthGoal() {
+  const text = monthGoalInput.value.trim();
+  if (!text) return;
+  const themes = await getYearlyThemes();
+  const currentTheme = themes.find(t => t.month === (currentMonth + 1));
+  const goals = currentTheme?.goals ?? [];
+  const updatedGoals = [...goals, { text, completed: false }];
+  await setMonthGoals(currentMonth + 1, updatedGoals);
+  monthGoalInput.value = '';
+  renderMonthGoals();
+  if (activeTab === 'year') {
+    renderYearTab();
+  }
+}
+
+async function renderMonthGoals() {
+  const themes = await getYearlyThemes();
+  const currentTheme = themes.find(t => t.month === (currentMonth + 1));
+  const goals = currentTheme?.goals ?? [];
+
+  monthGoalsList.innerHTML = '';
+  if (goals.length === 0) {
+    monthGoalsList.innerHTML = `<div style="text-align: center; color: var(--color-text-muted); font-size: 12px; margin-top: 20px;">No goals set for this month yet.</div>`;
+  } else {
+    goals.forEach((goal, index) => {
+      const item = document.createElement('div');
+      item.className = 'month-goal-item';
+      item.innerHTML = `
+        <input type="checkbox" class="month-goal-checkbox" ${goal.completed ? 'checked' : ''} />
+        <span class="month-goal-text ${goal.completed ? 'completed' : ''}">${escHtml(goal.text)}</span>
+        <button class="btn btn-ghost btn-xs btn-delete-month-goal" title="Delete goal">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      `;
+
+      // Event listener for toggling completion
+      item.querySelector('.month-goal-checkbox').addEventListener('change', async (e) => {
+        const updatedGoals = [...goals];
+        updatedGoals[index].completed = e.target.checked;
+        await setMonthGoals(currentMonth + 1, updatedGoals);
+        renderMonthGoals();
+        if (activeTab === 'year') {
+          renderYearTab();
+        }
+      });
+
+      // Event listener for delete
+      item.querySelector('.btn-delete-month-goal').addEventListener('click', async () => {
+        const updatedGoals = [...goals];
+        updatedGoals.splice(index, 1);
+        await setMonthGoals(currentMonth + 1, updatedGoals);
+        renderMonthGoals();
+        if (activeTab === 'year') {
+          renderYearTab();
+        }
+      });
+
+      monthGoalsList.appendChild(item);
+    });
+  }
+}
+
+// Tooltip mouse event handlers
+monthHoverPreview.addEventListener('mouseenter', () => {
+  clearTimeout(tooltipTimeout);
+});
+
+monthHoverPreview.addEventListener('mouseleave', () => {
+  hideTooltip();
+});
+
+async function showTooltip(cell, date) {
+  clearTimeout(tooltipTimeout);
+  const tasks = await getTasks(date);
+  
+  if (!tasks || tasks.length === 0) {
+    monthHoverPreview.classList.add('hidden');
+    return;
+  }
+
+  monthHoverPreview.classList.remove('hidden');
+
+  const dateLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  monthHoverPreview.innerHTML = `
+    <div class="month-preview-title">
+      <span>${dateLabel}</span>
+      <span style="font-size:10px; opacity:0.8;">${tasks.length} task${tasks.length > 1 ? 's' : ''}</span>
+    </div>
+    <div class="month-preview-list">
+      ${tasks.map((task) => {
+        const isCompleted = !!task.done;
+        return `
+          <div class="month-preview-task-item">
+            <input type="checkbox" class="month-preview-task-check" data-id="${task.id}" data-date="${date}" ${isCompleted ? 'checked' : ''} />
+            <span class="month-preview-task-text ${isCompleted ? 'completed' : ''}">${escHtml(task.title)}</span>
+            ${task.category ? `<span class="month-preview-task-cat cat-${task.category.toLowerCase().replace(/\s+/g, '-')}" style="background:var(--cat-${task.category.toLowerCase().replace(/\s+/g, '-')}-bg, var(--color-bg)); color:var(--cat-${task.category.toLowerCase().replace(/\s+/g, '-')}-text, var(--color-text));">${escHtml(task.category)}</span>` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  // Bind checkboxes in tooltip
+  monthHoverPreview.querySelectorAll('.month-preview-task-check').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const taskId = cb.dataset.id;
+      const taskDate = cb.dataset.date;
+      const dayTasks = await getTasks(taskDate);
+      const task = dayTasks.find(t => t.id === taskId);
+      if (task) {
+        task.done = cb.checked;
+        await updateTask(taskDate, task);
+        // Refresh grid + stats + tooltip
+        await renderMonthTab();
+        // Keep showing the tooltip but updated
+        showTooltip(cell, date);
+      }
+    });
+  });
+
+  // Position logic
+  const cellRect = cell.getBoundingClientRect();
+  let left = cellRect.right + window.scrollX + 5;
+  let top = cellRect.top + window.scrollY;
+
+  if (left + 260 > window.innerWidth) {
+    left = cellRect.left + window.scrollX - 255;
+  }
+  
+  monthHoverPreview.style.left = `${left}px`;
+  monthHoverPreview.style.top = `${top}px`;
+}
+
+function hideTooltip() {
+  tooltipTimeout = setTimeout(() => {
+    monthHoverPreview.classList.add('hidden');
+  }, 250);
+}
 
 async function renderMonthTab() {
   monthNavTitle.textContent = fmtMonthYear(currentYear, currentMonth);
@@ -580,6 +1309,34 @@ async function renderMonthTab() {
     })
   );
 
+  // Render stats banner
+  const currentMonthCounts = countData.filter((_, idx) => displayDates[idx].current);
+  const totalTasks = currentMonthCounts.reduce((sum, d) => sum + d.tasks, 0);
+  const doneTasks  = currentMonthCounts.reduce((sum, d) => sum + d.done, 0);
+  const totalBlocks = currentMonthCounts.reduce((sum, d) => sum + d.blocks, 0);
+  const percent    = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+  monthStatsBanner.innerHTML = `
+    <div class="month-stat-card">
+      <div class="month-stat-val">${totalTasks}</div>
+      <div class="month-stat-lbl">Tasks Planned</div>
+    </div>
+    <div class="month-stat-card">
+      <div class="month-stat-val">${doneTasks}/${totalTasks}</div>
+      <div class="month-stat-lbl">Completed (${percent}%)</div>
+    </div>
+    <div class="month-stat-card">
+      <div class="month-stat-val">${totalBlocks}</div>
+      <div class="month-stat-lbl">Blocked Hours</div>
+    </div>
+    <div class="month-stat-progress-bar">
+      <div class="month-stat-progress-fill" style="width: ${percent}%"></div>
+    </div>
+  `;
+
+  // Render month sidebar goals
+  await renderMonthGoals();
+
   displayDates.forEach(({ date, current }, i) => {
     const counts  = countData[i];
     const isToday = date === TODAY;
@@ -588,10 +1345,17 @@ async function renderMonthTab() {
     const cell = document.createElement('div');
     cell.className = `month-day-cell${isToday ? ' is-today' : ''}${!current ? ' other-month' : ''}`;
 
+    const isCompleted = counts.tasks > 0 && counts.done === counts.tasks;
+
     cell.innerHTML = `
       <div class="month-day-num">${dateNum}</div>
+      ${current ? `<button class="month-day-quick-add" title="Quick Add Task">+</button>` : ''}
       <div class="month-day-badges">
-        ${counts.tasks > 0 ? `<span class="month-badge month-badge-tasks">${counts.done}/${counts.tasks} tasks</span>` : ''}
+        ${counts.tasks > 0 ? `
+          <span class="month-day-progress-badge ${isCompleted ? 'completed' : ''}" title="${counts.done} of ${counts.tasks} tasks completed">
+            ${isCompleted ? '✓ Done' : `${counts.done}/${counts.tasks} tasks`}
+          </span>
+        ` : ''}
         ${counts.blocks > 0 ? `<span class="month-badge month-badge-blocks">${counts.blocks} block${counts.blocks > 1 ? 's' : ''}</span>` : ''}
       </div>
     `;
@@ -600,6 +1364,21 @@ async function renderMonthTab() {
       cell.addEventListener('click', () => {
         currentDate = date;
         goToDay(date);
+      });
+
+      const quickAddBtn = cell.querySelector('.month-day-quick-add');
+      if (quickAddBtn) {
+        quickAddBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openTaskModal(null, date);
+        });
+      }
+
+      cell.addEventListener('mouseenter', () => {
+        showTooltip(cell, date);
+      });
+      cell.addEventListener('mouseleave', () => {
+        hideTooltip();
       });
     }
 
@@ -629,6 +1408,10 @@ const QUARTERS = [
 async function renderYearTab() {
   yearNavTitle.textContent = String(currentYear);
   yearContent.innerHTML = '';
+
+  const realDate  = new Date();
+  const realYear  = realDate.getFullYear();
+  const realMonth = realDate.getMonth() + 1;
 
   const themes    = await getYearlyThemes();
   const allMs     = (await get('year_milestones')) ?? {};
@@ -674,24 +1457,210 @@ async function renderYearTab() {
       const card = document.createElement('div');
       card.className = 'year-month-card';
 
+      const isCurrentYear = (currentYear === realYear);
+      const isFutureYear  = (currentYear > realYear);
+
+      let isCurrent = false;
+      let isFuture  = false;
+      let isPast    = false;
+
+      if (isCurrentYear) {
+        if (m === realMonth) {
+          isCurrent = true;
+        } else if (m > realMonth) {
+          isFuture = true;
+        } else {
+          isPast = true;
+        }
+      } else if (isFutureYear) {
+        isFuture = true;
+      } else {
+        isPast = true;
+      }
+
+      if (isCurrent) {
+        card.classList.add('is-current');
+      } else if (isFuture) {
+        card.classList.add('is-future');
+      } else if (isPast) {
+        card.classList.add('is-past');
+      }
+
+      const monthHeader = document.createElement('div');
+      monthHeader.className = 'year-month-header';
+
       const monthName = document.createElement('div');
       monthName.className   = 'year-month-name';
       monthName.textContent = MONTH_NAMES[m - 1];
+      monthHeader.appendChild(monthName);
 
-      const themeInput = document.createElement('input');
-      themeInput.type        = 'text';
-      themeInput.className   = 'input input-sm year-month-theme';
-      themeInput.value       = themeVal;
-      themeInput.placeholder = 'Monthly theme…';
-      themeInput.maxLength   = 200;
-      themeInput.dataset.month = String(m);
+      if (isCurrent) {
+        const badge = document.createElement('span');
+        badge.className = 'current-badge';
+        badge.textContent = 'Current';
+        monthHeader.appendChild(badge);
+      }
 
-      themeInput.addEventListener('blur', async () => {
-        await setMonthTheme(m, themeInput.value.trim());
+      card.appendChild(monthHeader);
+
+      const progressContainer = document.createElement('div');
+      progressContainer.className = 'year-month-progress-container';
+      card.appendChild(progressContainer);
+
+      const goalsContainer = document.createElement('div');
+      goalsContainer.className = 'year-month-goals-list';
+
+      const rawList = themeEntry?.goals ?? (themeVal ? [themeVal] : []);
+      const goalsList = rawList.map(g => {
+        if (typeof g === 'string') return { text: g, completed: false };
+        return { text: g.text ?? '', completed: !!g.completed };
       });
 
-      card.appendChild(monthName);
-      card.appendChild(themeInput);
+      const updateMonthProgressVisual = (currentGoals) => {
+        const total = currentGoals.length;
+        const completed = currentGoals.filter(g => g.completed).length;
+        const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+        
+        if (total === 0) {
+          progressContainer.innerHTML = '';
+          return;
+        }
+
+        progressContainer.innerHTML = `
+          <div class="year-month-progress-meta">
+            <span>Goals Progress</span>
+            <span>${completed}/${total} (${percent}%)</span>
+          </div>
+          <div class="year-month-progress-bar-bg">
+            <div class="year-month-progress-bar-fill" style="width: ${percent}%"></div>
+          </div>
+        `;
+      };
+
+      const renderGoals = (currentGoals) => {
+        goalsContainer.innerHTML = '';
+        updateMonthProgressVisual(currentGoals);
+        currentGoals.forEach((goalObj, gIdx) => {
+          const goalText = goalObj.text;
+          const isCompleted = goalObj.completed;
+
+          const item = document.createElement('div');
+          item.className = `year-month-goal-item ${isCompleted ? 'is-completed' : ''}`;
+
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.className = 'goal-checkbox';
+          checkbox.checked = isCompleted;
+          checkbox.addEventListener('change', async () => {
+            currentGoals[gIdx].completed = checkbox.checked;
+            await setMonthGoals(m, currentGoals);
+            renderGoals(currentGoals);
+          });
+
+          const goalInput = document.createElement('input');
+          goalInput.type = 'text';
+          goalInput.className = 'input input-sm year-month-goal-input';
+          goalInput.value = goalText;
+          goalInput.placeholder = 'Goal...';
+
+          goalInput.addEventListener('blur', async () => {
+            const val = goalInput.value.trim();
+            if (val === '') {
+              currentGoals.splice(gIdx, 1);
+            } else {
+              currentGoals[gIdx].text = val;
+            }
+            await setMonthGoals(m, currentGoals);
+            renderGoals(currentGoals);
+          });
+
+          goalInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+              goalInput.blur();
+            }
+          });
+
+          const actionsContainer = document.createElement('div');
+          actionsContainer.className = 'goal-actions';
+
+          if (!isCompleted) {
+            const moveBtn = document.createElement('button');
+            moveBtn.className = 'btn-move-goal';
+            moveBtn.innerHTML = '→';
+            moveBtn.title = 'Move to next month';
+            moveBtn.addEventListener('click', async () => {
+              const nextMonth = m === 12 ? 1 : m + 1;
+              const themes = await getYearlyThemes();
+              
+              const currentTheme = themes.find(t => t.month === m);
+              if (currentTheme) {
+                currentTheme.goals = currentTheme.goals.filter((_, idx) => idx !== gIdx);
+                currentTheme.theme = currentTheme.goals[0]?.text ?? '';
+              }
+              
+              const nextTheme = themes.find(t => t.month === nextMonth);
+              if (nextTheme) {
+                nextTheme.goals.push({ text: goalText, completed: false });
+                nextTheme.theme = nextTheme.goals[0]?.text ?? '';
+              }
+              
+              await set('yearly_themes', themes);
+              renderYearTab();
+            });
+            actionsContainer.appendChild(moveBtn);
+          }
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.className = 'btn-delete-goal';
+          deleteBtn.innerHTML = '&times;';
+          deleteBtn.addEventListener('click', async () => {
+            currentGoals.splice(gIdx, 1);
+            await setMonthGoals(m, currentGoals);
+            renderGoals(currentGoals);
+          });
+          actionsContainer.appendChild(deleteBtn);
+
+          item.appendChild(checkbox);
+          item.appendChild(goalInput);
+          item.appendChild(actionsContainer);
+          goalsContainer.appendChild(item);
+        });
+      };
+
+      renderGoals(goalsList);
+      card.appendChild(goalsContainer);
+
+      const addGoalContainer = document.createElement('div');
+      addGoalContainer.className = 'add-goal-container';
+
+      const addGoalInput = document.createElement('input');
+      addGoalInput.type = 'text';
+      addGoalInput.className = 'input input-sm add-goal-input';
+      addGoalInput.placeholder = '+ Add goal...';
+
+      const handleAddGoal = async () => {
+        const val = addGoalInput.value.trim();
+        if (val) {
+          goalsList.push({ text: val, completed: false });
+          await setMonthGoals(m, goalsList);
+          addGoalInput.value = '';
+          renderGoals(goalsList);
+        }
+      };
+
+      addGoalInput.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter') {
+          await handleAddGoal();
+        }
+      });
+
+      addGoalInput.addEventListener('blur', async () => {
+        await handleAddGoal();
+      });
+
+      addGoalContainer.appendChild(addGoalInput);
+      card.appendChild(addGoalContainer);
+
       cardsRow.appendChild(card);
     }
 
@@ -700,10 +1669,123 @@ async function renderYearTab() {
   }
 }
 
+// ─── Progress Helpers & Confetti ────────────────────────────────────────────────
+function triggerConfettiCelebration() {
+  let canvas = document.getElementById('confetti-canvas');
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    canvas.id = 'confetti-canvas';
+    canvas.style.position = 'fixed';
+    canvas.style.top = '0';
+    canvas.style.left = '0';
+    canvas.style.width = '100vw';
+    canvas.style.height = '100vh';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.zIndex = '10000';
+    document.body.appendChild(canvas);
+  }
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  const colors = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#3B82F6'];
+  const particles = [];
+  for (let i = 0; i < 80; i++) {
+    particles.push({
+      x: canvas.width / 2 + (Math.random() - 0.5) * 60,
+      y: canvas.height * 0.4 + (Math.random() - 0.5) * 60,
+      vx: (Math.random() - 0.5) * 16,
+      vy: (Math.random() - 0.5) * 16 - 6,
+      r: Math.random() * 4 + 4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      opacity: 1,
+      rotation: Math.random() * 360,
+      rotationSpeed: (Math.random() - 0.5) * 8
+    });
+  }
+
+  let animationId;
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let active = false;
+    particles.forEach(p => {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.25; // gravity
+      p.vx *= 0.98; // friction
+      p.opacity -= 0.015;
+      p.rotation += p.rotationSpeed;
+
+      if (p.opacity > 0) {
+        active = true;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rotation * Math.PI / 180);
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.opacity;
+        ctx.fillRect(-p.r, -p.r, p.r * 2, p.r * 2);
+        ctx.restore();
+      }
+    });
+
+    if (active) {
+      animationId = requestAnimationFrame(draw);
+    } else {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      cancelAnimationFrame(animationId);
+    }
+  }
+  draw();
+}
+
+function updateDailyProgressCard(total, completed) {
+  const card = document.getElementById('daily-progress-card');
+  if (!card) return;
+  
+  if (total === 0) {
+    card.classList.add('hidden');
+    return;
+  }
+  
+  card.classList.remove('hidden');
+  const percent = Math.round((completed / total) * 100);
+  
+  document.getElementById('daily-progress-percent').textContent = `${percent}%`;
+  
+  const circle = document.getElementById('daily-progress-circle');
+  if (circle) {
+    const radius = parseFloat(circle.getAttribute('r') || '26');
+    const circumference = 2 * Math.PI * radius; // ~163.36
+    const offset = circumference - (percent / 100) * circumference;
+    circle.style.strokeDashoffset = offset;
+  }
+  
+  document.getElementById('daily-progress-ratio').textContent = `${completed} of ${total} completed`;
+  
+  const messageEl = document.getElementById('daily-progress-message');
+  if (messageEl) {
+    if (percent === 100) {
+      messageEl.textContent = "Absolute legend! All tasks completed today! 🎉";
+      card.classList.add('is-complete');
+    } else if (percent >= 50) {
+      messageEl.textContent = "Over halfway there! You're doing amazing! ✨";
+      card.classList.remove('is-complete');
+    } else if (percent > 0) {
+      messageEl.textContent = "Good start! Keep the momentum going! 💪";
+      card.classList.remove('is-complete');
+    } else {
+      messageEl.textContent = "A fresh day! Let's conquer the first task! 🚀";
+      card.classList.remove('is-complete');
+    }
+  }
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
+  collapsedCategories = (await get('collapsed_categories')) || [];
   renderDayDate();
   mountDayBoard();
+  await populateCategoryDropdowns();
   await renderPriorityList();
   await loadNotes();
 }

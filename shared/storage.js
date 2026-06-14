@@ -156,6 +156,8 @@ export async function get(key) {
 export async function set(key, value) {
   try {
     await chrome.storage.local.set({ [key]: value });
+    // Sync to cloud in the background (fire-and-forget)
+    syncToCloud(key, value);
   } catch (err) {
     console.error(`[Clarity Storage] set("${key}") failed:`, err);
     throw err;
@@ -172,6 +174,8 @@ export async function set(key, value) {
 export async function clear(key) {
   try {
     await chrome.storage.local.remove(key);
+    // Sync deletion to cloud in the background
+    deleteFromCloud(key);
   } catch (err) {
     console.error(`[Clarity Storage] clear("${key}") failed:`, err);
     throw err;
@@ -528,12 +532,23 @@ export async function getShortGoals() {
  */
 export async function getYearlyThemes() {
   const stored = (await get('yearly_themes')) ?? [];
-  // Ensure all 12 months are present
-  if (stored.length === 12) return stored;
-  const base = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, theme: '' }));
+  const base = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, theme: '', goals: [] }));
   for (const entry of stored) {
     const idx = entry.month - 1;
-    if (idx >= 0 && idx < 12) base[idx] = entry;
+    if (idx >= 0 && idx < 12) {
+      const rawGoals = entry.goals ?? (entry.theme ? [entry.theme] : []);
+      const normalizedGoals = rawGoals.map(g => {
+        if (typeof g === 'string') {
+          return { text: g, completed: false };
+        }
+        return { text: g.text ?? '', completed: !!g.completed };
+      });
+      base[idx] = {
+        ...entry,
+        theme: entry.theme ?? '',
+        goals: normalizedGoals
+      };
+    }
   }
   return base;
 }
@@ -549,8 +564,36 @@ export async function setMonthTheme(month, theme) {
   const idx = themes.findIndex((t) => t.month === month);
   if (idx >= 0) {
     themes[idx].theme = theme;
+    themes[idx].goals = themes[idx].goals || [];
+    if (!themes[idx].goals.some(g => g.text === theme)) {
+      themes[idx].goals.push({ text: theme, completed: false });
+    }
   } else {
-    themes.push({ month, theme });
+    themes.push({ month, theme, goals: [{ text: theme, completed: false }] });
+  }
+  await set('yearly_themes', themes);
+}
+
+/**
+ * Update the goals list for a specific month.
+ * @param {number} month  1–12
+ * @param {Array<Object>} goals
+ * @returns {Promise<void>}
+ */
+export async function setMonthGoals(month, goals) {
+  const themes = await getYearlyThemes();
+  const idx = themes.findIndex((t) => t.month === month);
+  const normalizedGoals = goals.map(g => {
+    if (typeof g === 'string') {
+      return { text: g, completed: false };
+    }
+    return { text: g.text ?? '', completed: !!g.completed };
+  });
+  if (idx >= 0) {
+    themes[idx].goals = normalizedGoals;
+    themes[idx].theme = normalizedGoals[0]?.text ?? ''; // Sync first goal text to theme
+  } else {
+    themes.push({ month, theme: normalizedGoals[0]?.text ?? '', goals: normalizedGoals });
   }
   await set('yearly_themes', themes);
 }
@@ -658,3 +701,345 @@ export async function getWeeklyTimeStats(days = 7) {
   }
   return results;
 }
+
+// ─── Firebase Auth & Sync REST API Integration ──────────────────────────────────
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAWpNPhuyP6fkd6UlK_6SFLVSFiOtqU6Gg",
+  authDomain: "clarity-app-b599e.firebaseapp.com",
+  projectId: "clarity-app-b599e",
+  storageBucket: "clarity-app-b599e.firebasestorage.app",
+  messagingSenderId: "778165477935",
+  appId: "1:778165477935:web:91d1f577bba63f6f8ddcda",
+  measurementId: "G-05JJY37MZJ"
+};
+
+const FIRESTORE_REST_BASE = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents`;
+
+/**
+ * Get current Firebase Auth state, refreshing token if necessary.
+ * @returns {Promise<object|null>}
+ */
+export async function getAuth() {
+  try {
+    // We use chrome.storage.local directly to bypass sync loops
+    const result = await chrome.storage.local.get('firebase_auth');
+    const auth = result.firebase_auth;
+    if (!auth) return null;
+
+    const now = Date.now();
+    // Refresh token if expired or expiring in next 5 minutes
+    if (auth.expiresAt && now > auth.expiresAt - 5 * 60 * 1000) {
+      const url = `https://securetoken.googleapis.com/v1/token?key=${firebaseConfig.apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `grant_type=refresh_token&refresh_token=${auth.refreshToken}`
+      });
+      if (res.ok) {
+        const data = await res.json();
+        auth.idToken = data.id_token;
+        auth.refreshToken = data.refresh_token;
+        auth.expiresAt = Date.now() + parseInt(data.expires_in) * 1000;
+        await chrome.storage.local.set({ firebase_auth: auth });
+      } else {
+        console.warn('[Sync] Auth session expired and refresh failed. Signing out.');
+        await chrome.storage.local.remove('firebase_auth');
+        return null;
+      }
+    }
+    return auth;
+  } catch (err) {
+    console.error('[Sync] Error getting auth session:', err);
+    return null;
+  }
+}
+
+/**
+ * Sign up a new user using Firebase Auth REST API.
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<object>} Auth data
+ */
+export async function signUp(email, password) {
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, returnSecureToken: true })
+  });
+  if (!res.ok) {
+    const errorData = await res.json();
+    throw new Error(errorData.error?.message || 'Failed to sign up');
+  }
+  const data = await res.json();
+  const auth = {
+    email: data.email,
+    localId: data.localId,
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    expiresAt: Date.now() + parseInt(data.expiresIn) * 1000
+  };
+  await chrome.storage.local.set({ firebase_auth: auth });
+  
+  // Pull existing cloud data if any
+  await pullLatestFromCloud();
+  return auth;
+}
+
+/**
+ * Sign in an existing user using Firebase Auth REST API.
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<object>} Auth data
+ */
+export async function signIn(email, password) {
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${firebaseConfig.apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, returnSecureToken: true })
+  });
+  if (!res.ok) {
+    const errorData = await res.json();
+    throw new Error(errorData.error?.message || 'Failed to sign in');
+  }
+  const data = await res.json();
+  const auth = {
+    email: data.email,
+    localId: data.localId,
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    expiresAt: Date.now() + parseInt(data.expiresIn) * 1000
+  };
+  await chrome.storage.local.set({ firebase_auth: auth });
+  
+  // Pull existing cloud data
+  await pullLatestFromCloud();
+  return auth;
+}
+
+/**
+ * Sign out the current user.
+ */
+export async function signOut() {
+  await chrome.storage.local.remove('firebase_auth');
+}
+
+/**
+ * Push a key-value update to Firestore.
+ * @param {string} key
+ * @param {any} value
+ */
+export async function syncToCloud(key, value) {
+  if (key === 'firebase_auth' || key === 'storage_size_info') return;
+
+  const auth = await getAuth();
+  if (!auth) return;
+
+  try {
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data/${key}`;
+    const fields = {
+      value: { stringValue: JSON.stringify(value) },
+      updatedAt: { integerValue: Date.now().toString() }
+    };
+
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${auth.idToken}`
+      },
+      body: JSON.stringify({ fields })
+    });
+    if (!res.ok) {
+      console.warn(`[Sync] Cloud write failed for key ${key}:`, await res.text());
+    }
+  } catch (err) {
+    console.error(`[Sync] Cloud write network error for key ${key}:`, err);
+  }
+}
+
+/**
+ * Delete a key from Firestore.
+ * @param {string} key
+ */
+export async function deleteFromCloud(key) {
+  if (key === 'firebase_auth' || key === 'storage_size_info') return;
+
+  const auth = await getAuth();
+  if (!auth) return;
+
+  try {
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data/${key}`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${auth.idToken}`
+      }
+    });
+    if (!res.ok) {
+      console.warn(`[Sync] Cloud delete failed for key ${key}:`, await res.text());
+    }
+  } catch (err) {
+    console.error(`[Sync] Cloud delete network error for key ${key}:`, err);
+  }
+}
+
+/**
+ * Pull all data documents from Firestore and populate local storage.
+ */
+export async function pullLatestFromCloud() {
+  const auth = await getAuth();
+  if (!auth) return;
+
+  try {
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data`;
+    const res = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${auth.idToken}`
+      }
+    });
+    if (!res.ok) {
+      // If collection doesn't exist yet, it returns 404/not found. That's fine.
+      if (res.status === 404) return;
+      console.warn('[Sync] Pull from cloud failed:', await res.text());
+      return;
+    }
+    const data = await res.json();
+    if (!data.documents) {
+      return;
+    }
+
+    for (const doc of data.documents) {
+      const parts = doc.name.split('/');
+      const key = parts[parts.length - 1];
+      const fields = doc.fields;
+      if (fields && fields.value && fields.value.stringValue) {
+        try {
+          const parsedVal = JSON.parse(fields.value.stringValue);
+          await chrome.storage.local.set({ [key]: parsedVal });
+        } catch (e) {
+          console.error(`[Sync] Error parsing value for pulled key "${key}":`, e);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Sync] Error pulling from cloud:', err);
+  }
+}
+
+// ─── Custom Categories helpers ─────────────────────────────────────────────────
+
+const DEFAULT_CATEGORIES = [
+  "Personal",
+  "Academic Work",
+  "Home Chores",
+  "Company Work",
+  "My Own Projects",
+  "Workout/Gym",
+  "Other"
+];
+
+/**
+ * Get all task categories (defaults + custom).
+ * @returns {Promise<Array<string>>}
+ */
+export async function getCustomCategories() {
+  const categories = await get('task_categories');
+  if (!categories || !Array.isArray(categories) || categories.length === 0) {
+    await saveCustomCategories(DEFAULT_CATEGORIES);
+    return [...DEFAULT_CATEGORIES];
+  }
+  return categories;
+}
+
+/**
+ * Save custom categories list.
+ * @param {Array<string>} categories
+ * @returns {Promise<void>}
+ */
+export async function saveCustomCategories(categories) {
+  await set('task_categories', categories);
+}
+
+/**
+ * Add a new custom category.
+ * @param {string} category
+ * @returns {Promise<boolean>} True if added, false if already exists.
+ */
+export async function addCustomCategory(category) {
+  const cleanCategory = category.trim();
+  if (!cleanCategory) return false;
+  const categories = await getCustomCategories();
+  if (categories.some(c => c.toLowerCase() === cleanCategory.toLowerCase())) {
+    return false;
+  }
+  categories.push(cleanCategory);
+  await saveCustomCategories(categories);
+  return true;
+}
+
+/**
+ * Delete a category by name.
+ * @param {string} category
+ * @returns {Promise<void>}
+ */
+export async function deleteCustomCategory(category) {
+  const categories = await getCustomCategories();
+  const filtered = categories.filter(c => c !== category);
+  await saveCustomCategories(filtered);
+}
+
+/**
+ * Rename a category across storage and all tasks.
+ * @param {string} oldName
+ * @param {string} newName
+ * @returns {Promise<boolean>}
+ */
+export async function renameCustomCategory(oldName, newName) {
+  const cleanNew = newName.trim();
+  if (!cleanNew || oldName === cleanNew) return false;
+  
+  const categories = await getCustomCategories();
+  
+  // Check if target name already exists
+  if (categories.some(c => c.toLowerCase() === cleanNew.toLowerCase())) {
+    return false;
+  }
+
+  const index = categories.indexOf(oldName);
+  if (index !== -1) {
+    categories[index] = cleanNew;
+    await saveCustomCategories(categories);
+  }
+  
+  // Scan all storage keys and update tasks matching oldName
+  try {
+    const allStorage = await chrome.storage.local.get(null);
+    for (const key of Object.keys(allStorage)) {
+      if (key.startsWith('tasks_')) {
+        const tasks = allStorage[key];
+        if (Array.isArray(tasks)) {
+          let changed = false;
+          const updatedTasks = tasks.map(t => {
+            if (t.category === oldName) {
+              changed = true;
+              return { ...t, category: cleanNew };
+            }
+            return t;
+          });
+          if (changed) {
+            await chrome.storage.local.set({ [key]: updatedTasks });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Storage] Error renaming category in tasks:', err);
+  }
+  return true;
+}
+
+
+

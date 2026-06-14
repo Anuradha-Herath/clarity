@@ -86,9 +86,27 @@
         <!-- Side panel -->
         <div class="day-side-col">
 
+          <!-- Daily Progress Card -->
+          <div class="card mb-4 daily-progress-card hidden" id="daily-progress-card">
+            <div class="card-body progress-card-layout" style="display: flex; align-items: center; gap: 16px; padding: 16px;">
+              <div class="progress-ring-container" style="position: relative; width: 64px; height: 64px; flex-shrink: 0;">
+                <svg class="progress-ring" width="64" height="64">
+                  <circle class="progress-ring-circle-bg" stroke="var(--color-border)" stroke-width="5" fill="transparent" r="26" cx="32" cy="32"/>
+                  <circle class="progress-ring-circle" id="daily-progress-circle" stroke="var(--color-success)" stroke-width="5" fill="transparent" r="26" cx="32" cy="32" style="stroke-dasharray: 163.36; stroke-dashoffset: 163.36; transform: rotate(-90deg); transform-origin: 32px 32px; transition: stroke-dashoffset 0.35s; stroke-linecap: round;"/>
+                </svg>
+                <div class="progress-ring-text" id="daily-progress-percent" style="position: absolute; top: 0; left: 0; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: var(--color-text);">0%</div>
+              </div>
+              <div class="progress-card-info" style="flex: 1; display: flex; flex-direction: column; gap: 2px;">
+                <div class="progress-card-title" style="font-size: 14px; font-weight: 700; color: var(--color-text);">Today's Progress</div>
+                <div class="progress-card-ratio" id="daily-progress-ratio" style="font-size: 12px; color: var(--color-text-muted);">0 of 0 completed</div>
+                <div class="progress-card-message" id="daily-progress-message" style="font-size: 11px; font-style: italic; color: var(--color-accent); line-height: 1.3; margin-top: 2px;">A fresh day! Let's conquer the first task! 🚀</div>
+              </div>
+            </div>
+          </div>
+
           <!-- Top 3 Priorities -->
           <div class="card mb-4">
-            <div class="card-header">
+            <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
               <div class="card-title">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
                      fill="none" stroke="currentColor" stroke-width="2.5"
@@ -96,9 +114,20 @@
                   <polyline points="9 11 12 14 22 4"/>
                   <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
                 </svg>
-                Top 3 Priorities
+                Tasks
               </div>
-              <span class="text-xs text-muted" id="priority-task-count"></span>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-ghost btn-xs" id="btn-manage-categories" style="font-size: 11px; padding: 2px 6px;">Manage Cats</button>
+                <span class="text-xs text-muted" id="priority-task-count"></span>
+              </div>
+            </div>
+
+            <!-- Category Filter Row -->
+            <div class="priority-filter-row" style="padding: 8px 12px; border-bottom: 1px solid var(--color-border); display: flex; gap: 8px; align-items: center; background: var(--color-bg);">
+              <span class="text-xs text-muted font-semibold" style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;">Filter:</span>
+              <select id="priority-category-filter" class="select select-sm flex-1" style="height: 28px; font-size: 12px; padding: 2px 8px;">
+                <option value="all">All Categories</option>
+              </select>
             </div>
 
             <div id="priority-list" class="priority-list">
@@ -106,15 +135,22 @@
             </div>
 
             <!-- Quick-add row -->
-            <div class="priority-add-row">
-              <div class="priority-p-select">
-                <div class="priority-dot-btn active" data-p="1" title="High priority"></div>
-                <div class="priority-dot-btn" data-p="2" title="Medium priority"></div>
-                <div class="priority-dot-btn" data-p="3" title="Low priority"></div>
+            <div class="priority-add-row" style="flex-direction: column; align-items: stretch; gap: 6px; padding: 12px; border-top: 1px solid var(--color-border);">
+              <div class="flex items-center justify-between gap-2">
+                <div class="priority-p-select">
+                  <div class="priority-dot-btn active" data-p="1" title="High priority"></div>
+                  <div class="priority-dot-btn" data-p="2" title="Medium priority"></div>
+                  <div class="priority-dot-btn" data-p="3" title="Low priority"></div>
+                </div>
+                <select id="quick-add-category-input" class="select select-sm" style="width: 140px; height: 24px; font-size: 11px; padding: 0 4px;">
+                  <!-- Dynamically populated -->
+                </select>
               </div>
-              <input type="text" id="priority-input" class="input input-sm flex-1"
-                     placeholder="Add a task…" maxlength="200" />
-              <button class="btn btn-primary btn-sm" id="btn-add-priority">Add</button>
+              <div class="flex gap-2">
+                <input type="text" id="priority-input" class="input input-sm flex-1"
+                       placeholder="Add a task…" maxlength="200" />
+                <button class="btn btn-primary btn-sm" id="btn-add-priority">Add</button>
+              </div>
             </div>
           </div>
 
@@ -155,6 +191,12 @@
           Prev week
         </button>
         <div class="week-nav-title" id="week-nav-title">Jun 9 – Jun 15, 2026</div>
+        <div class="week-progress-container" style="display: flex; align-items: center; gap: 8px; flex: 0 1 300px; margin: 0 16px;">
+          <span id="week-progress-text" style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); white-space: nowrap;">Progress: 0%</span>
+          <div class="week-progress-bar-bg" style="flex: 1; height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; position: relative;">
+            <div id="week-progress-bar-fill" class="week-progress-bar-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-success) 100%); transition: width 0.35s ease; border-radius: 3px;"></div>
+          </div>
+        </div>
         <button class="btn btn-ghost btn-sm" id="btn-next-week">
           Next week
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
@@ -192,14 +234,40 @@
           </svg>
         </button>
       </div>
-      <div class="month-dow-headers">
-        <div>Mon</div><div>Tue</div><div>Wed</div>
-        <div>Thu</div><div>Fri</div>
-        <div class="month-weekend">Sat</div>
-        <div class="month-weekend">Sun</div>
+
+      <!-- Month stats banner -->
+      <div class="month-stats-banner" id="month-stats-banner">
+        <!-- Will be populated dynamically by JS -->
       </div>
-      <div class="month-grid" id="month-grid">
-        <!-- Calendar rendered by JS -->
+
+      <!-- Main split layout container -->
+      <div class="month-layout-container">
+        <div class="month-calendar-area">
+          <div class="month-dow-headers">
+            <div>Mon</div><div>Tue</div><div>Wed</div>
+            <div>Thu</div><div>Fri</div>
+            <div class="month-weekend">Sat</div>
+            <div class="month-weekend">Sun</div>
+          </div>
+          <div class="month-grid" id="month-grid">
+            <!-- Calendar rendered by JS -->
+          </div>
+        </div>
+
+        <!-- Right sidebar for monthly goals -->
+        <div class="month-goals-sidebar" id="month-goals-sidebar">
+          <div class="month-sidebar-header">
+            <h4>Monthly Goals</h4>
+            <span class="month-sidebar-subtitle">Focus & Milestones</span>
+          </div>
+          <div class="month-goals-list" id="month-goals-list">
+            <!-- Will be populated dynamically by JS -->
+          </div>
+          <div class="month-goals-footer">
+            <input type="text" id="month-goal-input" class="input input-sm" placeholder="New monthly goal..." maxlength="100" />
+            <button class="btn btn-primary btn-sm" id="btn-add-month-goal">Add</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -252,6 +320,12 @@
           <label class="label" for="task-title-input">Title</label>
           <input type="text" id="task-title-input" class="input" placeholder="Task title" maxlength="200" />
         </div>
+        <div class="form-group">
+          <label class="label" for="task-category-input">Category</label>
+          <select id="task-category-input" class="select">
+            <!-- Dynamically populated -->
+          </select>
+        </div>
         <div class="form-row">
           <div class="form-group">
             <label class="label" for="task-priority-input">Priority</label>
@@ -266,6 +340,19 @@
             <input type="number" id="task-estimate-input" class="input" min="5" max="480" step="5" placeholder="30" />
           </div>
         </div>
+        <div class="form-group" style="margin-top: 12px; border-top: 1px solid var(--color-border); padding-top: 12px;">
+          <label class="label" style="display: flex; justify-content: space-between; align-items: center;">
+            Subtasks
+            <span class="text-xs text-muted" id="subtask-progress">0/0</span>
+          </label>
+          <div class="flex gap-2" style="margin-bottom: 8px;">
+            <input type="text" id="task-subtask-input" class="input flex-1 input-sm" placeholder="Add a subtask…" maxlength="150" />
+            <button class="btn btn-primary btn-sm" id="btn-add-subtask" style="height: 32px; padding: 0 10px;">Add</button>
+          </div>
+          <div id="modal-subtasks-list" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
       </div>
       <div class="modal-footer modal-footer-split">
         <button class="btn btn-danger hidden" id="btn-task-delete">Delete</button>
@@ -276,6 +363,39 @@
       </div>
     </div>
   </div>
+
+  <!-- Custom Categories management modal -->
+  <div class="modal-overlay hidden" id="categories-modal-overlay">
+    <div class="modal" style="max-width:340px">
+      <div class="modal-header">
+        <div class="modal-title">Manage Categories</div>
+        <button class="btn btn-ghost btn-icon" id="categories-modal-close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="label" for="new-category-input">New Category</label>
+          <div class="flex gap-2">
+            <input type="text" id="new-category-input" class="input flex-1" placeholder="Category name (e.g. Reading)" maxlength="30" />
+            <button class="btn btn-primary btn-sm" id="btn-add-custom-category">Add</button>
+          </div>
+        </div>
+        <label class="label">Categories List</label>
+        <div class="categories-list" id="manage-categories-list" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: var(--border-radius); background: var(--color-bg); padding: 4px;">
+          <!-- Populate with existing categories and delete options -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Month day hover task preview tooltip -->
+  <div id="month-hover-preview" class="month-hover-preview hidden"></div>
 
   <script type="module" src="planner.js"></script>
 </body>

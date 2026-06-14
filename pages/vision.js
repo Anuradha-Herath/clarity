@@ -11,6 +11,7 @@ import {
   generateId, compressImage,
   checkStorageSize,
 } from '../shared/storage.js';
+import { showConfirm, showAlert } from '../shared/dialog.js';
 
 // ─── Category colour helper ────────────────────────────────────────────────────
 const CAT_STYLES = {
@@ -277,7 +278,8 @@ async function saveSmartGoal() {
 
 async function deleteSmartGoal() {
   if (!editingSmartId) return;
-  if (!confirm('Delete this SMART goal?')) return;
+  const isConfirmed = await showConfirm('Delete this SMART goal?', 'Delete Goal');
+  if (!isConfirmed) return;
   await remove('smart_goals', editingSmartId);
   closeSmartModal();
   await loadSmartGoals();
@@ -293,7 +295,7 @@ smartImgFile.addEventListener('change', async () => {
     btnSmartImgUpload.disabled = true;
     const base64 = await compressImage(file);
     applySmartModalImage(base64);
-  } catch { alert('Failed to process image.'); }
+  } catch { showAlert('Failed to process image.', 'Upload Error'); }
   finally {
     btnSmartImgUpload.textContent = 'Upload image';
     btnSmartImgUpload.disabled = false;
@@ -455,7 +457,8 @@ async function saveGoal() {
 
 async function deleteGoal() {
   if (!editingGoalId || !editingGoalType) return;
-  if (!confirm('Delete this goal?')) return;
+  const isConfirmed = await showConfirm('Delete this goal?', 'Delete Goal');
+  if (!isConfirmed) return;
   const key = editingGoalType === 'long' ? 'goals_long' : 'goals_short';
   await remove(key, editingGoalId);
   closeGoalModal();

@@ -5,6 +5,7 @@
  */
 
 import { get, set, push, generateId, todayKey, getTasks, getBlocks, updateTask, formatHour } from '../shared/storage.js';
+import { showConfirm, showAlert } from '../shared/dialog.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const RING_R         = 100;
@@ -499,10 +500,10 @@ function buildLogEntry(entry) {
 
 // Mode tabs
 modeTabs.forEach((tab) => {
-  tab.addEventListener('click', () => {
+  tab.addEventListener('click', async () => {
     if (tab.dataset.mode === currentMode) return;
     if (running) {
-      const confirmSwitch = confirm(`Switching to ${MODES[tab.dataset.mode].label} will reset your active session. Are you sure?`);
+      const confirmSwitch = await showConfirm(`Switching to ${MODES[tab.dataset.mode].label} will reset your active session. Are you sure?`, 'Reset Active Session');
       if (!confirmSwitch) return;
     }
     pauseTimer();
@@ -608,7 +609,7 @@ function closeManualLogModal() {
 async function handleManualLogSave() {
   const durationMin = parseInt(manualLogDuration.value, 10);
   if (isNaN(durationMin) || durationMin <= 0) {
-    alert('Please enter a valid duration in minutes.');
+    showAlert('Please enter a valid duration in minutes.', 'Invalid Duration');
     return;
   }
 
