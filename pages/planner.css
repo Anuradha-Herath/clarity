@@ -303,6 +303,12 @@
   display: flex;
   flex-direction: column;
   min-height: 400px;
+  transition: background var(--transition), border var(--transition), box-shadow var(--transition);
+}
+
+.week-col.drag-over {
+  background: var(--color-accent-soft) !important;
+  box-shadow: inset 0 0 0 2px var(--color-accent);
 }
 
 .week-col:last-child {
@@ -366,9 +372,20 @@
 .week-task-item {
   display: flex;
   align-items: flex-start;
-  gap: 5px;
-  padding: 5px 3px;
+  gap: 6px;
+  padding: 6px 4px;
   border-bottom: 1px solid var(--color-border);
+  cursor: grab;
+  user-select: none;
+}
+
+.week-task-item:active {
+  cursor: grabbing;
+}
+
+.week-task-item.dragging {
+  opacity: 0.4;
+  border: 1px dashed var(--color-accent);
 }
 
 .week-task-item:last-child {
@@ -390,13 +407,31 @@
   color: var(--color-text);
   line-height: 1.4;
   word-break: break-word;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.week-task-title:hover {
+  text-decoration: underline;
+  opacity: 0.85;
 }
 
 .week-task-title.done-text {
   color: var(--color-text-muted);
 }
 
-.week-carry-btn {
+.week-task-actions {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.week-task-item:hover .week-task-actions {
+  display: flex;
+}
+
+.week-action-btn {
   background: none;
   border: 1px solid var(--color-border);
   border-radius: 4px;
@@ -409,14 +444,20 @@
   font-size: 11px;
   color: var(--color-text-muted);
   flex-shrink: 0;
-  transition: background var(--transition), color var(--transition);
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
   font-family: var(--font-base);
 }
 
-.week-carry-btn:hover {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-  border-color: var(--color-accent);
+.week-action-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+.week-action-btn.delete:hover {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .week-empty-day {
@@ -957,3 +998,260 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Month Tab Custom Enhancements ─────────────────────── */
+.month-stats-banner {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px 20px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.month-stat-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--color-bg);
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  min-width: 140px;
+}
+
+.month-stat-val {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+.month-stat-lbl {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.month-stat-progress-bar {
+  flex: 1;
+  max-width: 280px;
+  height: 6px;
+  background: var(--color-border);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.month-stat-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-success) 100%);
+  width: 0%;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.month-layout-container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.month-calendar-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Goals Sidebar Styling */
+.month-goals-sidebar {
+  width: 280px;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  transition: width var(--transition);
+}
+
+.month-sidebar-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.month-sidebar-header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.month-sidebar-subtitle {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.month-goals-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.month-goal-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  position: relative;
+  transition: all var(--transition);
+}
+
+.month-goal-item:hover {
+  border-color: var(--color-accent);
+}
+
+.month-goal-checkbox {
+  margin-top: 3px;
+  cursor: pointer;
+  accent-color: var(--color-accent);
+}
+
+.month-goal-text {
+  flex: 1;
+  color: var(--color-text);
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.month-goal-text.completed {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+.btn-delete-month-goal {
+  color: var(--color-danger);
+  opacity: 0;
+  transition: opacity var(--transition);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.month-goal-item:hover .btn-delete-month-goal {
+  opacity: 1;
+}
+
+.month-goals-footer {
+  padding: 12px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  gap: 8px;
+}
+
+/* Quick Add Button inside Day Cells */
+.month-day-quick-add {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: bold;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 5;
+  border: none;
+  cursor: pointer;
+}
+
+.month-day-cell:hover .month-day-quick-add {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.month-day-quick-add:hover {
+  background: var(--color-accent-hover, #5a46e5);
+}
+
+/* Hover preview tooltip */
+.month-hover-preview {
+  position: absolute;
+  z-index: 1000;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg, 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1));
+  width: 250px;
+  padding: 12px;
+  pointer-events: auto;
+  transition: opacity 0.15s ease;
+}
+
+.month-preview-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--color-text);
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.month-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.month-preview-task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.month-preview-task-check {
+  margin-top: 2px;
+  cursor: pointer;
+  accent-color: var(--color-accent);
+}
+
+.month-preview-task-text {
+  flex: 1;
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+.month-preview-task-text.completed {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+}
+
+.month-preview-task-cat {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-weight: 600;
+  margin-left: auto;
+}
+

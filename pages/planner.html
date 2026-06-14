@@ -234,14 +234,40 @@
           </svg>
         </button>
       </div>
-      <div class="month-dow-headers">
-        <div>Mon</div><div>Tue</div><div>Wed</div>
-        <div>Thu</div><div>Fri</div>
-        <div class="month-weekend">Sat</div>
-        <div class="month-weekend">Sun</div>
+
+      <!-- Month stats banner -->
+      <div class="month-stats-banner" id="month-stats-banner">
+        <!-- Will be populated dynamically by JS -->
       </div>
-      <div class="month-grid" id="month-grid">
-        <!-- Calendar rendered by JS -->
+
+      <!-- Main split layout container -->
+      <div class="month-layout-container">
+        <div class="month-calendar-area">
+          <div class="month-dow-headers">
+            <div>Mon</div><div>Tue</div><div>Wed</div>
+            <div>Thu</div><div>Fri</div>
+            <div class="month-weekend">Sat</div>
+            <div class="month-weekend">Sun</div>
+          </div>
+          <div class="month-grid" id="month-grid">
+            <!-- Calendar rendered by JS -->
+          </div>
+        </div>
+
+        <!-- Right sidebar for monthly goals -->
+        <div class="month-goals-sidebar" id="month-goals-sidebar">
+          <div class="month-sidebar-header">
+            <h4>Monthly Goals</h4>
+            <span class="month-sidebar-subtitle">Focus & Milestones</span>
+          </div>
+          <div class="month-goals-list" id="month-goals-list">
+            <!-- Will be populated dynamically by JS -->
+          </div>
+          <div class="month-goals-footer">
+            <input type="text" id="month-goal-input" class="input input-sm" placeholder="New monthly goal..." maxlength="100" />
+            <button class="btn btn-primary btn-sm" id="btn-add-month-goal">Add</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -367,6 +393,9 @@
       </div>
     </div>
   </div>
+
+  <!-- Month day hover task preview tooltip -->
+  <div id="month-hover-preview" class="month-hover-preview hidden"></div>
 
   <script type="module" src="planner.js"></script>
 </body>

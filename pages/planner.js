@@ -15,6 +15,7 @@ import {
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
+import { showConfirm, showAlert } from '../shared/dialog.js';
 
 // ─── Date helpers ──────────────────────────────────────────────────────────────
 function isoDate(d) { return d.toISOString().slice(0, 10); }
@@ -503,9 +504,11 @@ const subtaskProgress  = document.getElementById('subtask-progress');
 
 let editingTask = null;
 let editingSubtasks = [];
+let editingTaskDate = null;
 
-function openTaskModal(task = null) {
+function openTaskModal(task = null, date = null) {
   editingTask = task;
+  editingTaskDate = date;
   editingSubtasks = task?.subtasks ? JSON.parse(JSON.stringify(task.subtasks)) : [];
   taskModalTitle.textContent = task ? 'Edit Task' : 'Add Task';
   taskTitleInput.value    = task?.title       ?? '';
@@ -582,6 +585,7 @@ taskSubtaskInput.addEventListener('keydown', (e) => {
 function closeTaskModal() {
   taskModalOverlay.classList.add('hidden');
   editingTask = null;
+  editingTaskDate = null;
 }
 
 async function saveTask() {
@@ -592,15 +596,29 @@ async function saveTask() {
   const timeEstimate= parseInt(taskEstimateInput.value, 10) || null;
   const subtasks    = editingSubtasks;
 
+  const targetDate = editingTaskDate || currentDate;
+
   if (editingTask) {
-    await updateTask(currentDate, editingTask.id, { title, priority, timeEstimate, category, subtasks });
+    await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks });
   } else {
-    await addTask(currentDate, {
+    await addTask(targetDate, {
       id: generateId(), title, done: false, priority, timeEstimate, category, subtasks,
     });
   }
   closeTaskModal();
-  await renderPriorityList();
+  await refreshActiveTab();
+}
+
+async function refreshActiveTab() {
+  if (activeTab === 'day') {
+    await renderPriorityList();
+  } else if (activeTab === 'week') {
+    await renderWeekTab();
+  } else if (activeTab === 'month') {
+    await renderMonthTab();
+  } else if (activeTab === 'year') {
+    await renderYearTab();
+  }
 }
 
 taskModalClose.addEventListener('click', closeTaskModal);
@@ -609,9 +627,10 @@ btnTaskSave.addEventListener('click', saveTask);
 taskModalOverlay.addEventListener('click', (e) => { if (e.target === taskModalOverlay) closeTaskModal(); });
 btnTaskDelete.addEventListener('click', async () => {
   if (!editingTask) return;
-  await deleteTask(currentDate, editingTask.id);
+  const targetDate = editingTaskDate || currentDate;
+  await deleteTask(targetDate, editingTask.id);
   closeTaskModal();
-  await renderPriorityList();
+  await refreshActiveTab();
 });
 taskTitleInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); saveTask(); }
@@ -695,7 +714,7 @@ async function renderManageCategoriesList() {
         await renderManageCategoriesList();
         await renderPriorityList();
       } else {
-        alert('Category name already exists or is invalid.');
+        showAlert('Category name already exists or is invalid.', 'Invalid Category Name');
       }
     };
 
@@ -715,7 +734,11 @@ async function renderManageCategoriesList() {
   manageCategoriesList.querySelectorAll('.delete-cat-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const catToDelete = btn.dataset.cat;
-      if (confirm(`Are you sure you want to delete the category "${catToDelete}"? (Tasks in this category will display under "Personal")`)) {
+      const isConfirmed = await showConfirm(
+        `Are you sure you want to delete the category "${catToDelete}"? (Tasks in this category will display under "Personal")`,
+        'Delete Category'
+      );
+      if (isConfirmed) {
         await deleteCustomCategory(catToDelete);
         await populateCategoryDropdowns();
         await renderManageCategoriesList();
@@ -750,7 +773,7 @@ async function handleAddCategory() {
     await renderManageCategoriesList();
     await renderPriorityList();
   } else {
-    alert('Category name already exists or is invalid.');
+    showAlert('Category name already exists or is invalid.', 'Invalid Category Name');
   }
 }
 
@@ -881,6 +904,43 @@ async function renderWeekTab() {
       goToDay(date);
     });
 
+    // Drag-and-drop column listeners
+    col.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      col.classList.add('drag-over');
+    });
+
+    col.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      col.classList.add('drag-over');
+    });
+
+    col.addEventListener('dragleave', () => {
+      col.classList.remove('drag-over');
+    });
+
+    col.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      try {
+        const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+        if (data && data.id && data.sourceDate) {
+          const targetDate = date;
+          if (data.sourceDate === targetDate) return;
+
+          const sourceTasks = await getTasks(data.sourceDate);
+          const taskToMove = sourceTasks.find(t => t.id === data.id);
+          if (taskToMove) {
+            await deleteTask(data.sourceDate, data.id);
+            await addTask(targetDate, taskToMove);
+            renderWeekTab();
+          }
+        }
+      } catch (err) {
+        console.error('Drag and drop error:', err);
+      }
+    });
+
     weekGrid.appendChild(col);
     renderWeekTaskList(tasks, date, document.getElementById(`wt-${date}`));
   });
@@ -923,10 +983,32 @@ function renderWeekTaskList(tasks, date, container) {
   });
 
   container.innerHTML = sorted.map((t) => `
-    <div class="week-task-item" data-id="${t.id}">
+    <div class="week-task-item" data-id="${t.id}" data-date="${date}" draggable="true">
       <input type="checkbox" class="week-task-check" data-id="${t.id}" data-date="${date}" ${t.done ? 'checked' : ''} />
-      <span class="week-task-title${t.done ? ' done-text' : ''}">${escHtml(t.title)}</span>
-      ${!t.done ? `<button class="week-carry-btn" data-id="${t.id}" data-date="${date}" title="Carry to next day">→</button>` : ''}
+      <span class="week-task-title${t.done ? ' done-text' : ''}" data-id="${t.id}" data-date="${date}">${escHtml(t.title)}</span>
+      <div class="week-task-actions">
+        ${!t.done ? `
+          <button class="week-action-btn carry" data-id="${t.id}" data-date="${date}" title="Carry to next day">
+            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+            </svg>
+          </button>
+        ` : ''}
+        <button class="week-action-btn edit" data-id="${t.id}" data-date="${date}" title="Edit task">
+          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4z"/>
+          </svg>
+        </button>
+        <button class="week-action-btn delete" data-id="${t.id}" data-date="${date}" title="Delete task">
+          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/>
+            <line x1="14" y1="11" x2="14" y2="17"/>
+          </svg>
+        </button>
+      </div>
     </div>
   `).join('');
 
@@ -938,8 +1020,35 @@ function renderWeekTaskList(tasks, date, container) {
     });
   });
 
+  // Title click opens edit modal
+  container.querySelectorAll('.week-task-title').forEach((titleEl) => {
+    titleEl.addEventListener('click', () => {
+      const task = sorted.find((x) => x.id === titleEl.dataset.id);
+      if (task) openTaskModal(task, titleEl.dataset.date);
+    });
+  });
+
+  // Edit button
+  container.querySelectorAll('.week-action-btn.edit').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const task = sorted.find((x) => x.id === btn.dataset.id);
+      if (task) openTaskModal(task, btn.dataset.date);
+    });
+  });
+
+  // Delete button
+  container.querySelectorAll('.week-action-btn.delete').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const isConfirmed = await showConfirm('Are you sure you want to delete this task?', 'Delete Task');
+      if (isConfirmed) {
+        await deleteTask(btn.dataset.date, btn.dataset.id);
+        renderWeekTab();
+      }
+    });
+  });
+
   // Carry forward
-  container.querySelectorAll('.week-carry-btn').forEach((btn) => {
+  container.querySelectorAll('.week-action-btn.carry').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const fromDate = btn.dataset.date;
       const d = new Date(fromDate + 'T12:00:00');
@@ -953,6 +1062,21 @@ function renderWeekTaskList(tasks, date, container) {
       }
     });
   });
+
+  // Drag listeners
+  container.querySelectorAll('.week-task-item').forEach((item) => {
+    item.addEventListener('dragstart', (e) => {
+      const taskId = item.dataset.id;
+      const sourceDate = item.dataset.date;
+      e.dataTransfer.setData('text/plain', JSON.stringify({ id: taskId, sourceDate }));
+      e.dataTransfer.effectAllowed = 'move';
+      item.classList.add('dragging');
+    });
+
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+    });
+  });
 }
 
 async function weekQuickAdd(date, title) {
@@ -964,10 +1088,20 @@ async function weekQuickAdd(date, title) {
 //     MONTH TAB
 // ══════════════════════════════════════════════════════════
 
-const monthGrid     = document.getElementById('month-grid');
-const monthNavTitle = document.getElementById('month-nav-title');
-const btnPrevMonth  = document.getElementById('btn-prev-month');
-const btnNextMonth  = document.getElementById('btn-next-month');
+const monthGrid       = document.getElementById('month-grid');
+const monthNavTitle   = document.getElementById('month-nav-title');
+const btnPrevMonth    = document.getElementById('btn-prev-month');
+const btnNextMonth    = document.getElementById('btn-next-month');
+
+// New Month Tab selectors
+const monthStatsBanner   = document.getElementById('month-stats-banner');
+const monthGoalsSidebar  = document.getElementById('month-goals-sidebar');
+const monthGoalsList     = document.getElementById('month-goals-list');
+const monthGoalInput     = document.getElementById('month-goal-input');
+const btnAddMonthGoal    = document.getElementById('btn-add-month-goal');
+const monthHoverPreview  = document.getElementById('month-hover-preview');
+
+let tooltipTimeout = null;
 
 btnPrevMonth.addEventListener('click', () => {
   currentMonth--;
@@ -980,6 +1114,156 @@ btnNextMonth.addEventListener('click', () => {
   if (currentMonth > 11) { currentMonth = 0; currentYear++; }
   renderMonthTab();
 });
+
+// Sidebar goals interactions
+btnAddMonthGoal.addEventListener('click', addMonthGoal);
+monthGoalInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addMonthGoal();
+  }
+});
+
+async function addMonthGoal() {
+  const text = monthGoalInput.value.trim();
+  if (!text) return;
+  const themes = await getYearlyThemes();
+  const currentTheme = themes.find(t => t.month === (currentMonth + 1));
+  const goals = currentTheme?.goals ?? [];
+  const updatedGoals = [...goals, { text, completed: false }];
+  await setMonthGoals(currentMonth + 1, updatedGoals);
+  monthGoalInput.value = '';
+  renderMonthGoals();
+  if (activeTab === 'year') {
+    renderYearTab();
+  }
+}
+
+async function renderMonthGoals() {
+  const themes = await getYearlyThemes();
+  const currentTheme = themes.find(t => t.month === (currentMonth + 1));
+  const goals = currentTheme?.goals ?? [];
+
+  monthGoalsList.innerHTML = '';
+  if (goals.length === 0) {
+    monthGoalsList.innerHTML = `<div style="text-align: center; color: var(--color-text-muted); font-size: 12px; margin-top: 20px;">No goals set for this month yet.</div>`;
+  } else {
+    goals.forEach((goal, index) => {
+      const item = document.createElement('div');
+      item.className = 'month-goal-item';
+      item.innerHTML = `
+        <input type="checkbox" class="month-goal-checkbox" ${goal.completed ? 'checked' : ''} />
+        <span class="month-goal-text ${goal.completed ? 'completed' : ''}">${escHtml(goal.text)}</span>
+        <button class="btn btn-ghost btn-xs btn-delete-month-goal" title="Delete goal">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      `;
+
+      // Event listener for toggling completion
+      item.querySelector('.month-goal-checkbox').addEventListener('change', async (e) => {
+        const updatedGoals = [...goals];
+        updatedGoals[index].completed = e.target.checked;
+        await setMonthGoals(currentMonth + 1, updatedGoals);
+        renderMonthGoals();
+        if (activeTab === 'year') {
+          renderYearTab();
+        }
+      });
+
+      // Event listener for delete
+      item.querySelector('.btn-delete-month-goal').addEventListener('click', async () => {
+        const updatedGoals = [...goals];
+        updatedGoals.splice(index, 1);
+        await setMonthGoals(currentMonth + 1, updatedGoals);
+        renderMonthGoals();
+        if (activeTab === 'year') {
+          renderYearTab();
+        }
+      });
+
+      monthGoalsList.appendChild(item);
+    });
+  }
+}
+
+// Tooltip mouse event handlers
+monthHoverPreview.addEventListener('mouseenter', () => {
+  clearTimeout(tooltipTimeout);
+});
+
+monthHoverPreview.addEventListener('mouseleave', () => {
+  hideTooltip();
+});
+
+async function showTooltip(cell, date) {
+  clearTimeout(tooltipTimeout);
+  const tasks = await getTasks(date);
+  
+  if (!tasks || tasks.length === 0) {
+    monthHoverPreview.classList.add('hidden');
+    return;
+  }
+
+  monthHoverPreview.classList.remove('hidden');
+
+  const dateLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  monthHoverPreview.innerHTML = `
+    <div class="month-preview-title">
+      <span>${dateLabel}</span>
+      <span style="font-size:10px; opacity:0.8;">${tasks.length} task${tasks.length > 1 ? 's' : ''}</span>
+    </div>
+    <div class="month-preview-list">
+      ${tasks.map((task) => {
+        const isCompleted = !!task.done;
+        return `
+          <div class="month-preview-task-item">
+            <input type="checkbox" class="month-preview-task-check" data-id="${task.id}" data-date="${date}" ${isCompleted ? 'checked' : ''} />
+            <span class="month-preview-task-text ${isCompleted ? 'completed' : ''}">${escHtml(task.title)}</span>
+            ${task.category ? `<span class="month-preview-task-cat cat-${task.category.toLowerCase().replace(/\s+/g, '-')}" style="background:var(--cat-${task.category.toLowerCase().replace(/\s+/g, '-')}-bg, var(--color-bg)); color:var(--cat-${task.category.toLowerCase().replace(/\s+/g, '-')}-text, var(--color-text));">${escHtml(task.category)}</span>` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  // Bind checkboxes in tooltip
+  monthHoverPreview.querySelectorAll('.month-preview-task-check').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const taskId = cb.dataset.id;
+      const taskDate = cb.dataset.date;
+      const dayTasks = await getTasks(taskDate);
+      const task = dayTasks.find(t => t.id === taskId);
+      if (task) {
+        task.done = cb.checked;
+        await updateTask(taskDate, task);
+        // Refresh grid + stats + tooltip
+        await renderMonthTab();
+        // Keep showing the tooltip but updated
+        showTooltip(cell, date);
+      }
+    });
+  });
+
+  // Position logic
+  const cellRect = cell.getBoundingClientRect();
+  let left = cellRect.right + window.scrollX + 5;
+  let top = cellRect.top + window.scrollY;
+
+  if (left + 260 > window.innerWidth) {
+    left = cellRect.left + window.scrollX - 255;
+  }
+  
+  monthHoverPreview.style.left = `${left}px`;
+  monthHoverPreview.style.top = `${top}px`;
+}
+
+function hideTooltip() {
+  tooltipTimeout = setTimeout(() => {
+    monthHoverPreview.classList.add('hidden');
+  }, 250);
+}
 
 async function renderMonthTab() {
   monthNavTitle.textContent = fmtMonthYear(currentYear, currentMonth);
@@ -1025,6 +1309,34 @@ async function renderMonthTab() {
     })
   );
 
+  // Render stats banner
+  const currentMonthCounts = countData.filter((_, idx) => displayDates[idx].current);
+  const totalTasks = currentMonthCounts.reduce((sum, d) => sum + d.tasks, 0);
+  const doneTasks  = currentMonthCounts.reduce((sum, d) => sum + d.done, 0);
+  const totalBlocks = currentMonthCounts.reduce((sum, d) => sum + d.blocks, 0);
+  const percent    = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+  monthStatsBanner.innerHTML = `
+    <div class="month-stat-card">
+      <div class="month-stat-val">${totalTasks}</div>
+      <div class="month-stat-lbl">Tasks Planned</div>
+    </div>
+    <div class="month-stat-card">
+      <div class="month-stat-val">${doneTasks}/${totalTasks}</div>
+      <div class="month-stat-lbl">Completed (${percent}%)</div>
+    </div>
+    <div class="month-stat-card">
+      <div class="month-stat-val">${totalBlocks}</div>
+      <div class="month-stat-lbl">Blocked Hours</div>
+    </div>
+    <div class="month-stat-progress-bar">
+      <div class="month-stat-progress-fill" style="width: ${percent}%"></div>
+    </div>
+  `;
+
+  // Render month sidebar goals
+  await renderMonthGoals();
+
   displayDates.forEach(({ date, current }, i) => {
     const counts  = countData[i];
     const isToday = date === TODAY;
@@ -1037,6 +1349,7 @@ async function renderMonthTab() {
 
     cell.innerHTML = `
       <div class="month-day-num">${dateNum}</div>
+      ${current ? `<button class="month-day-quick-add" title="Quick Add Task">+</button>` : ''}
       <div class="month-day-badges">
         ${counts.tasks > 0 ? `
           <span class="month-day-progress-badge ${isCompleted ? 'completed' : ''}" title="${counts.done} of ${counts.tasks} tasks completed">
@@ -1051,6 +1364,21 @@ async function renderMonthTab() {
       cell.addEventListener('click', () => {
         currentDate = date;
         goToDay(date);
+      });
+
+      const quickAddBtn = cell.querySelector('.month-day-quick-add');
+      if (quickAddBtn) {
+        quickAddBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openTaskModal(null, date);
+        });
+      }
+
+      cell.addEventListener('mouseenter', () => {
+        showTooltip(cell, date);
+      });
+      cell.addEventListener('mouseleave', () => {
+        hideTooltip();
       });
     }
 
