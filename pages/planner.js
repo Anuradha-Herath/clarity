@@ -8,7 +8,7 @@ import {
   getTasks, addTask, updateTask, deleteTask, setTasks,
   getBlocks,
   get, set,
-  getYearlyThemes, setMonthTheme,
+  getYearlyThemes, setMonthTheme, setMonthGoals,
   generateId, todayKey, dateKey,
   snapHour,
   getCustomCategories, addCustomCategory, deleteCustomCategory, renameCustomCategory,
@@ -310,7 +310,7 @@ async function renderPriorityList() {
               ${t.subtasks && t.subtasks.length > 0 ? `
                 <div class="subtasks-list" style="margin-left: 28px; margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
                   ${t.subtasks.map(sub => `
-                    <div class="subtask-item" style="display: flex; align-items: center; gap: 6px; padding: 1px 0;">
+                    <div class="subtask-item" draggable="true" data-task-id="${t.id}" data-sub-id="${sub.id}" style="display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: grab;">
                       <input type="checkbox" class="subtask-item-check" data-task-id="${t.id}" data-sub-id="${sub.id}" ${sub.done ? 'checked' : ''} style="width: 12px; height: 12px; accent-color: var(--color-accent); cursor: pointer;" />
                       <span class="subtask-title-text${sub.done ? ' done-text' : ''}" style="font-size: 12px; color: var(--color-text);">${escHtml(sub.title)}</span>
                     </div>
@@ -401,6 +401,29 @@ async function renderPriorityList() {
           timeEstimate: task.timeEstimate
         }));
         e.dataTransfer.effectAllowed = 'copyMove';
+      }
+    });
+  });
+
+  // Subtask dragstart binding
+  priorityList.querySelectorAll('.subtask-item').forEach((item) => {
+    item.addEventListener('dragstart', (e) => {
+      e.stopPropagation(); // Avoid triggering parent task drag
+      const taskId = item.dataset.taskId;
+      const subId = item.dataset.subId;
+      const task = sorted.find(t => t.id === taskId);
+      if (task && task.subtasks) {
+        const sub = task.subtasks.find(s => s.id === subId);
+        if (sub) {
+          e.dataTransfer.setData('text/plain', JSON.stringify({
+            id: sub.id,
+            parentId: task.id,
+            title: `${task.title} — ${sub.title}`,
+            category: task.category,
+            timeEstimate: 30 // Subtasks default to 30 mins
+          }));
+          e.dataTransfer.effectAllowed = 'copyMove';
+        }
       }
     });
   });
@@ -995,6 +1018,10 @@ async function renderYearTab() {
   yearNavTitle.textContent = String(currentYear);
   yearContent.innerHTML = '';
 
+  const realDate  = new Date();
+  const realYear  = realDate.getFullYear();
+  const realMonth = realDate.getMonth() + 1;
+
   const themes    = await getYearlyThemes();
   const allMs     = (await get('year_milestones')) ?? {};
   const yearMs    = allMs[currentYear] ?? { q1: '', q2: '', q3: '', q4: '' };
@@ -1039,24 +1066,184 @@ async function renderYearTab() {
       const card = document.createElement('div');
       card.className = 'year-month-card';
 
+      const isCurrentYear = (currentYear === realYear);
+      const isFutureYear  = (currentYear > realYear);
+
+      let isCurrent = false;
+      let isFuture  = false;
+      let isPast    = false;
+
+      if (isCurrentYear) {
+        if (m === realMonth) {
+          isCurrent = true;
+        } else if (m > realMonth) {
+          isFuture = true;
+        } else {
+          isPast = true;
+        }
+      } else if (isFutureYear) {
+        isFuture = true;
+      } else {
+        isPast = true;
+      }
+
+      if (isCurrent) {
+        card.classList.add('is-current');
+      } else if (isFuture) {
+        card.classList.add('is-future');
+      } else if (isPast) {
+        card.classList.add('is-past');
+      }
+
+      const monthHeader = document.createElement('div');
+      monthHeader.className = 'year-month-header';
+
       const monthName = document.createElement('div');
       monthName.className   = 'year-month-name';
       monthName.textContent = MONTH_NAMES[m - 1];
+      monthHeader.appendChild(monthName);
 
-      const themeInput = document.createElement('input');
-      themeInput.type        = 'text';
-      themeInput.className   = 'input input-sm year-month-theme';
-      themeInput.value       = themeVal;
-      themeInput.placeholder = 'Monthly theme…';
-      themeInput.maxLength   = 200;
-      themeInput.dataset.month = String(m);
+      if (isCurrent) {
+        const badge = document.createElement('span');
+        badge.className = 'current-badge';
+        badge.textContent = 'Current';
+        monthHeader.appendChild(badge);
+      }
 
-      themeInput.addEventListener('blur', async () => {
-        await setMonthTheme(m, themeInput.value.trim());
+      card.appendChild(monthHeader);
+
+      const goalsContainer = document.createElement('div');
+      goalsContainer.className = 'year-month-goals-list';
+
+      const rawList = themeEntry?.goals ?? (themeVal ? [themeVal] : []);
+      const goalsList = rawList.map(g => {
+        if (typeof g === 'string') return { text: g, completed: false };
+        return { text: g.text ?? '', completed: !!g.completed };
       });
 
-      card.appendChild(monthName);
-      card.appendChild(themeInput);
+      const renderGoals = (currentGoals) => {
+        goalsContainer.innerHTML = '';
+        currentGoals.forEach((goalObj, gIdx) => {
+          const goalText = goalObj.text;
+          const isCompleted = goalObj.completed;
+
+          const item = document.createElement('div');
+          item.className = `year-month-goal-item ${isCompleted ? 'is-completed' : ''}`;
+
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.className = 'goal-checkbox';
+          checkbox.checked = isCompleted;
+          checkbox.addEventListener('change', async () => {
+            currentGoals[gIdx].completed = checkbox.checked;
+            await setMonthGoals(m, currentGoals);
+            renderGoals(currentGoals);
+          });
+
+          const goalInput = document.createElement('input');
+          goalInput.type = 'text';
+          goalInput.className = 'input input-sm year-month-goal-input';
+          goalInput.value = goalText;
+          goalInput.placeholder = 'Goal...';
+
+          goalInput.addEventListener('blur', async () => {
+            const val = goalInput.value.trim();
+            if (val === '') {
+              currentGoals.splice(gIdx, 1);
+            } else {
+              currentGoals[gIdx].text = val;
+            }
+            await setMonthGoals(m, currentGoals);
+            renderGoals(currentGoals);
+          });
+
+          goalInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+              goalInput.blur();
+            }
+          });
+
+          const actionsContainer = document.createElement('div');
+          actionsContainer.className = 'goal-actions';
+
+          if (!isCompleted) {
+            const moveBtn = document.createElement('button');
+            moveBtn.className = 'btn-move-goal';
+            moveBtn.innerHTML = '→';
+            moveBtn.title = 'Move to next month';
+            moveBtn.addEventListener('click', async () => {
+              const nextMonth = m === 12 ? 1 : m + 1;
+              const themes = await getYearlyThemes();
+              
+              const currentTheme = themes.find(t => t.month === m);
+              if (currentTheme) {
+                currentTheme.goals = currentTheme.goals.filter((_, idx) => idx !== gIdx);
+                currentTheme.theme = currentTheme.goals[0]?.text ?? '';
+              }
+              
+              const nextTheme = themes.find(t => t.month === nextMonth);
+              if (nextTheme) {
+                nextTheme.goals.push({ text: goalText, completed: false });
+                nextTheme.theme = nextTheme.goals[0]?.text ?? '';
+              }
+              
+              await set('yearly_themes', themes);
+              renderYearTab();
+            });
+            actionsContainer.appendChild(moveBtn);
+          }
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.className = 'btn-delete-goal';
+          deleteBtn.innerHTML = '&times;';
+          deleteBtn.addEventListener('click', async () => {
+            currentGoals.splice(gIdx, 1);
+            await setMonthGoals(m, currentGoals);
+            renderGoals(currentGoals);
+          });
+          actionsContainer.appendChild(deleteBtn);
+
+          item.appendChild(checkbox);
+          item.appendChild(goalInput);
+          item.appendChild(actionsContainer);
+          goalsContainer.appendChild(item);
+        });
+      };
+
+      renderGoals(goalsList);
+      card.appendChild(goalsContainer);
+
+      const addGoalContainer = document.createElement('div');
+      addGoalContainer.className = 'add-goal-container';
+
+      const addGoalInput = document.createElement('input');
+      addGoalInput.type = 'text';
+      addGoalInput.className = 'input input-sm add-goal-input';
+      addGoalInput.placeholder = '+ Add goal...';
+
+      const handleAddGoal = async () => {
+        const val = addGoalInput.value.trim();
+        if (val) {
+          goalsList.push({ text: val, completed: false });
+          await setMonthGoals(m, goalsList);
+          addGoalInput.value = '';
+          renderGoals(goalsList);
+        }
+      };
+
+      addGoalInput.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter') {
+          await handleAddGoal();
+        }
+      });
+
+      addGoalInput.addEventListener('blur', async () => {
+        await handleAddGoal();
+      });
+
+      addGoalContainer.appendChild(addGoalInput);
+      card.appendChild(addGoalContainer);
+
       cardsRow.appendChild(card);
     }
 

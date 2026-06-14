@@ -166,10 +166,18 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       box-sizing: border-box;
       transition: opacity 150ms;
     `;
-    el.innerHTML = `
+    const isSmall = height < 35;
+    el.innerHTML = isSmall ? `
+      <div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>
+      <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px;cursor:pointer;padding-right:8px;">
+        ${esc(b.title || 'Untitled')}
+        <span data-time-label style="font-size:9px;font-weight:normal;opacity:0.8;margin-left:4px;">(${formatHour(b.start)} – ${formatHour(b.end)})</span>
+      </div>
+      <div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>
+    ` : `
       <div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>
       <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;">${esc(b.title || 'Untitled')}</div>
-      <div style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;">${formatHour(b.start)} – ${formatHour(b.end)}</div>
+      <div data-time-label style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;">${formatHour(b.start)} – ${formatHour(b.end)}</div>
       <div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>
     `;
 
@@ -317,9 +325,10 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       dragMove.el.style.top = hourToPx(newStart) + 'px';
       
       // Update text representation of time inside the element
-      const timeLabel = dragMove.el.querySelector('div:nth-child(3)'); // Since 1st child is drag-handle, 2nd is title, 3rd is time
+      const timeLabel = dragMove.el.querySelector('[data-time-label]');
       if (timeLabel) {
-        timeLabel.textContent = `${formatHour(newStart)} – ${formatHour(newEnd)}`;
+        const isSmall = dragMove.duration <= 0.5;
+        timeLabel.textContent = isSmall ? `(${formatHour(newStart)} – ${formatHour(newEnd)})` : `${formatHour(newStart)} – ${formatHour(newEnd)}`;
       }
       
       dragMove.currentStart = newStart;

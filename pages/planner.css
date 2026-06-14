@@ -661,11 +661,57 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  transition: border-color var(--transition);
+  transition: border-color var(--transition), opacity var(--transition);
 }
 
 .year-month-card:hover {
   border-color: var(--color-accent);
+}
+
+.year-month-card.is-current {
+  background: var(--color-accent-soft);
+  border: 1.5px solid var(--color-accent);
+}
+
+.year-month-card.is-current .year-month-name {
+  color: var(--color-accent);
+}
+
+.year-month-card.is-future {
+  border-color: rgba(79, 70, 229, 0.25);
+  background: var(--color-surface);
+}
+
+.year-month-card.is-future .year-month-name {
+  color: var(--color-accent);
+}
+
+.year-month-card.is-past {
+  opacity: 0.55;
+  filter: grayscale(30%);
+}
+
+.year-month-card.is-past:hover {
+  opacity: 0.85;
+}
+
+.year-month-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.current-badge {
+  background: var(--color-accent);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1;
 }
 
 .year-month-name {
@@ -676,8 +722,109 @@
   letter-spacing: 0.06em;
 }
 
-.year-month-theme {
-  font-size: 13px;
+.year-month-goals-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.year-month-goal-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  position: relative;
+}
+
+.goal-checkbox {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  accent-color: var(--color-accent);
+}
+
+.year-month-goal-input {
+  border: none !important;
+  background: transparent !important;
+  padding: 2px 0 !important;
+  font-size: 13px !important;
+  box-shadow: none !important;
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+  transition: opacity var(--transition), color var(--transition);
+}
+
+.year-month-goal-input:focus {
+  border-bottom: 1px solid var(--color-accent) !important;
+  border-radius: 0 !important;
+}
+
+.year-month-goal-item.is-completed .year-month-goal-input {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+  opacity: 0.65;
+}
+
+.goal-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition);
+  flex-shrink: 0;
+}
+
+.year-month-goal-item:hover .goal-actions {
+  opacity: 1;
+}
+
+.btn-move-goal,
+.btn-delete-goal {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color var(--transition);
+}
+
+.btn-move-goal {
+  font-size: 14px;
+}
+
+.btn-delete-goal {
+  font-size: 16px;
+}
+
+.btn-move-goal:hover {
+  color: var(--color-accent);
+}
+
+.btn-delete-goal:hover {
+  color: var(--color-danger);
+}
+
+.add-goal-container {
+  margin-top: var(--space-1);
+}
+
+.add-goal-input {
+  border: 1px dashed var(--color-border) !important;
+  background: transparent !important;
+  color: var(--color-text-muted) !important;
+  font-size: 12px !important;
+  padding: 4px var(--space-2) !important;
+  cursor: text;
+  transition: border-color var(--transition), color var(--transition) !important;
+}
+
+.add-goal-input:focus {
+  border-style: solid !important;
+  border-color: var(--color-accent) !important;
+  color: var(--color-text) !important;
 }
 
 /* ── Responsive ─────────────────────────────────────────── */

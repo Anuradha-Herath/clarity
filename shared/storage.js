@@ -532,12 +532,23 @@ export async function getShortGoals() {
  */
 export async function getYearlyThemes() {
   const stored = (await get('yearly_themes')) ?? [];
-  // Ensure all 12 months are present
-  if (stored.length === 12) return stored;
-  const base = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, theme: '' }));
+  const base = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, theme: '', goals: [] }));
   for (const entry of stored) {
     const idx = entry.month - 1;
-    if (idx >= 0 && idx < 12) base[idx] = entry;
+    if (idx >= 0 && idx < 12) {
+      const rawGoals = entry.goals ?? (entry.theme ? [entry.theme] : []);
+      const normalizedGoals = rawGoals.map(g => {
+        if (typeof g === 'string') {
+          return { text: g, completed: false };
+        }
+        return { text: g.text ?? '', completed: !!g.completed };
+      });
+      base[idx] = {
+        ...entry,
+        theme: entry.theme ?? '',
+        goals: normalizedGoals
+      };
+    }
   }
   return base;
 }
@@ -553,8 +564,36 @@ export async function setMonthTheme(month, theme) {
   const idx = themes.findIndex((t) => t.month === month);
   if (idx >= 0) {
     themes[idx].theme = theme;
+    themes[idx].goals = themes[idx].goals || [];
+    if (!themes[idx].goals.some(g => g.text === theme)) {
+      themes[idx].goals.push({ text: theme, completed: false });
+    }
   } else {
-    themes.push({ month, theme });
+    themes.push({ month, theme, goals: [{ text: theme, completed: false }] });
+  }
+  await set('yearly_themes', themes);
+}
+
+/**
+ * Update the goals list for a specific month.
+ * @param {number} month  1–12
+ * @param {Array<Object>} goals
+ * @returns {Promise<void>}
+ */
+export async function setMonthGoals(month, goals) {
+  const themes = await getYearlyThemes();
+  const idx = themes.findIndex((t) => t.month === month);
+  const normalizedGoals = goals.map(g => {
+    if (typeof g === 'string') {
+      return { text: g, completed: false };
+    }
+    return { text: g.text ?? '', completed: !!g.completed };
+  });
+  if (idx >= 0) {
+    themes[idx].goals = normalizedGoals;
+    themes[idx].theme = normalizedGoals[0]?.text ?? ''; // Sync first goal text to theme
+  } else {
+    themes.push({ month, theme: normalizedGoals[0]?.text ?? '', goals: normalizedGoals });
   }
   await set('yearly_themes', themes);
 }
