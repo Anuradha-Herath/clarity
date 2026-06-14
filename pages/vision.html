@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vision & Goals — Clarity</title>
+  <meta name="description" content="Define your vision, set SMART goals, and track long and short-term goals." />
+  <link rel="stylesheet" href="../shared/style.css" />
+  <link rel="stylesheet" href="vision.css" />
+</head>
+<body>
+  <div class="page-wrapper">
+
+    <!-- ── Header ─────────────────────────────────────────── -->
+    <header class="page-header">
+      <div class="header-brand">
+        <div class="brand-dot"></div>
+        Clarity
+      </div>
+      <nav class="header-nav">
+        <a href="dashboard.html" class="nav-link">Dashboard</a>
+        <a href="planner.html"   class="nav-link">Planner</a>
+        <a href="vision.html"    class="nav-link active">Vision</a>
+        <a href="tracker.html"   class="nav-link">Tracker</a>
+      </nav>
+    </header>
+
+    <!-- ── Page content ───────────────────────────────────── -->
+    <main class="page-content vision-content">
+
+      <!-- ── 1. Vision Section ────────────────────────────── -->
+      <section class="vision-section mb-6">
+        <div class="section-title">My Vision</div>
+        <div class="vision-card" id="vision-card">
+
+          <!-- Background image layer -->
+          <div class="vision-bg-image hidden" id="vision-bg-image">
+            <img id="vision-img" src="" alt="Vision board image" />
+          </div>
+
+          <!-- Overlay panel -->
+          <div class="vision-overlay" id="vision-overlay">
+            <textarea
+              id="vision-textarea"
+              class="vision-textarea"
+              placeholder="Write your vision statement… Where do you want to be in 5 years? What does your ideal life look like? Be specific and inspiring."
+              rows="5"
+              maxlength="2000"
+            ></textarea>
+            <div class="vision-actions">
+              <button class="btn btn-secondary btn-sm" id="btn-upload-vision">
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                  <circle cx="8.5" cy="8.5" r="1.5"/>
+                  <polyline points="21 15 16 10 5 21"/>
+                </svg>
+                Upload image
+              </button>
+              <button class="btn btn-danger btn-sm hidden" id="btn-remove-vision-img">
+                Remove image
+              </button>
+              <span class="vision-save-hint text-sm text-muted" id="vision-save-hint"></span>
+            </div>
+          </div>
+
+          <!-- Hidden file input -->
+          <input type="file" id="vision-file-input" accept="image/*" class="hidden" />
+        </div>
+      </section>
+
+      <!-- ── 2. SMART Goals Section ────────────────────────── -->
+      <section class="smart-section mb-6">
+        <div class="flex items-center justify-between mb-3">
+          <div class="section-title" style="margin-bottom:0">SMART Goals</div>
+          <span class="text-sm text-muted" id="smart-count">0 goals</span>
+        </div>
+        <div class="smart-scroll-container">
+          <div class="smart-scroll" id="smart-scroll">
+            <!-- Cards injected by JS -->
+
+            <!-- Add card (always last) -->
+            <div class="smart-card smart-add-card" id="smart-add-card" role="button" tabindex="0">
+              <div class="smart-add-inner">
+                <div class="smart-add-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="1.8"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="16"/>
+                    <line x1="8" y1="12" x2="16" y2="12"/>
+                  </svg>
+                </div>
+                <span>Add SMART goal</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 3. Long & Short Term Goals ───────────────────── -->
+      <section class="goals-section">
+        <div class="goals-columns">
+
+          <!-- Long-term -->
+          <div class="goals-col">
+            <div class="goals-col-header">
+              <div class="section-title" style="margin-bottom:0">Long-term Goals</div>
+              <button class="btn btn-accent-soft btn-sm" id="btn-add-long">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2.5"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"/>
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                Add
+              </button>
+            </div>
+            <div class="goals-list" id="long-goals-list">
+              <!-- Items injected by JS -->
+            </div>
+            <div class="empty-state hidden" id="long-goals-empty">
+              <div class="empty-state-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="1.5"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="8" x2="12" y2="16"/>
+                  <line x1="8" y1="12" x2="16" y2="12"/>
+                </svg>
+              </div>
+              <div class="empty-state-title">No long-term goals yet</div>
+              <div class="empty-state-desc">Think big — what do you want to achieve in the next 1–5 years?</div>
+            </div>
+          </div>
+
+          <!-- Short-term -->
+          <div class="goals-col">
+            <div class="goals-col-header">
+              <div class="section-title" style="margin-bottom:0">Short-term Goals</div>
+              <button class="btn btn-accent-soft btn-sm" id="btn-add-short">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2.5"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"/>
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                Add
+              </button>
+            </div>
+            <div class="goals-list" id="short-goals-list">
+              <!-- Items injected by JS -->
+            </div>
+            <div class="empty-state hidden" id="short-goals-empty">
+              <div class="empty-state-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="1.5"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="9 11 12 14 22 4"/>
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                </svg>
+              </div>
+              <div class="empty-state-title">No short-term goals yet</div>
+              <div class="empty-state-desc">What do you want to accomplish in the next 30–90 days?</div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       SMART GOAL MODAL
+  ════════════════════════════════════════════════════ -->
+  <div class="modal-overlay hidden" id="smart-modal-overlay">
+    <div class="modal" id="smart-modal">
+      <div class="modal-header">
+        <div class="modal-title" id="smart-modal-title">Add SMART Goal</div>
+        <button class="btn btn-ghost btn-icon" id="smart-modal-close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+
+        <!-- Goal image -->
+        <div class="smart-modal-img-wrap" id="smart-modal-img-wrap">
+          <img id="smart-modal-img-preview" src="" alt="" class="smart-modal-img hidden" />
+          <div class="smart-modal-img-placeholder" id="smart-modal-img-placeholder">
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="1.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <circle cx="8.5" cy="8.5" r="1.5"/>
+              <polyline points="21 15 16 10 5 21"/>
+            </svg>
+            <span>Upload an image</span>
+          </div>
+          <div class="smart-modal-img-actions">
+            <button class="btn btn-secondary btn-sm" id="btn-smart-img-upload">
+              Upload image
+            </button>
+            <button class="btn btn-danger btn-sm hidden" id="btn-smart-img-remove">
+              Remove
+            </button>
+          </div>
+          <input type="file" id="smart-img-file" accept="image/*" class="hidden" />
+        </div>
+
+        <div class="form-group mt-4">
+          <label class="label" for="smart-title">Goal title *</label>
+          <input type="text" id="smart-title" class="input" placeholder="e.g. Launch my SaaS product" maxlength="120" />
+        </div>
+
+        <div class="form-group">
+          <label class="label" for="smart-desc">Description</label>
+          <textarea id="smart-desc" class="textarea" rows="3"
+            placeholder="Make it Specific, Measurable, Achievable, Relevant, Time-bound…"></textarea>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="label" for="smart-date">Target date</label>
+            <input type="date" id="smart-date" class="input" />
+          </div>
+          <div class="form-group">
+            <label class="label" for="smart-cat">Category</label>
+            <select id="smart-cat" class="select">
+              <option value="Deep Work">Deep Work</option>
+              <option value="Health">Health</option>
+              <option value="Learning">Learning</option>
+              <option value="Personal">Personal</option>
+              <option value="Meetings">Career / Meetings</option>
+              <option value="Break">Other</option>
+            </select>
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-footer modal-footer-split">
+        <button class="btn btn-danger hidden" id="btn-smart-delete">Delete goal</button>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary" id="btn-smart-cancel">Cancel</button>
+          <button class="btn btn-primary" id="btn-smart-save">Save goal</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       LONG/SHORT GOAL MODAL
+  ════════════════════════════════════════════════════ -->
+  <div class="modal-overlay hidden" id="goal-modal-overlay">
+    <div class="modal" id="goal-modal" style="max-width:400px">
+      <div class="modal-header">
+        <div class="modal-title" id="goal-modal-title">Add Goal</div>
+        <button class="btn btn-ghost btn-icon" id="goal-modal-close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="label" for="goal-title">Title *</label>
+          <input type="text" id="goal-title" class="input" placeholder="Goal title" maxlength="200" />
+        </div>
+        <div class="form-group">
+          <label class="label" for="goal-desc">Description</label>
+          <textarea id="goal-desc" class="textarea" rows="2" placeholder="Optional notes…"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="label" for="goal-date">Target date</label>
+          <input type="date" id="goal-date" class="input" />
+        </div>
+      </div>
+      <div class="modal-footer modal-footer-split">
+        <button class="btn btn-danger hidden" id="btn-goal-delete">Delete</button>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary" id="btn-goal-cancel">Cancel</button>
+          <button class="btn btn-primary" id="btn-goal-save">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="vision.js"></script>
+</body>
+</html>

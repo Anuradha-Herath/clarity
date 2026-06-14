@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "Clarity — Personal Planning Command Center",
+  "short_name": "Clarity",
+  "version": "1.0.0",
+  "description": "Your personal planning and productivity command center. Plan your day, track time, capture ideas, and stay aligned with your vision.",
+
+  "icons": {
+    "16":  "assets/icons/16.png",
+    "32":  "assets/icons/32.png",
+    "48":  "assets/icons/48.png",
+    "128": "assets/icons/128.png"
+  },
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16":  "assets/icons/16.png",
+      "32":  "assets/icons/32.png",
+      "48":  "assets/icons/48.png",
+      "128": "assets/icons/128.png"
+    },
+    "default_title": "Clarity"
+  },
+
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "tabs"
+  ],
+
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Open Clarity popup"
+    },
+    "quick-capture": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Space",
+        "mac": "Command+Shift+Space"
+      },
+      "description": "Open quick capture"
+    }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "pages/dashboard.html",
+        "pages/planner.html",
+        "pages/vision.html",
+        "pages/tracker.html",
+        "capture/capture.html",
+        "shared/style.css"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

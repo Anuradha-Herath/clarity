@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tracker — Clarity</title>
+  <meta name="description" content="Pomodoro timer, focus sessions, and daily log." />
+  <link rel="stylesheet" href="../shared/style.css" />
+  <link rel="stylesheet" href="tracker.css" />
+</head>
+<body>
+  <div class="page-wrapper tracker-wrapper">
+
+    <!-- ── Header ─────────────────────────────────────────── -->
+    <header class="page-header">
+      <div class="header-brand">
+        <div class="brand-dot"></div>
+        Clarity
+      </div>
+      <nav class="header-nav">
+        <a href="dashboard.html" class="nav-link">Dashboard</a>
+        <a href="planner.html"   class="nav-link">Planner</a>
+        <a href="vision.html"    class="nav-link">Vision</a>
+        <a href="tracker.html"   class="nav-link active">Tracker</a>
+      </nav>
+    </header>
+
+    <!-- ── Two-column main ───────────────────────────────── -->
+    <div class="tracker-main">
+
+      <!-- ════ LEFT: timer panel ═══════════════════════════ -->
+      <div class="timer-panel" id="timer-panel">
+
+        <!-- Mode tabs -->
+        <div class="mode-tabs" id="mode-tabs">
+          <button class="mode-tab active" data-mode="focus">Focus</button>
+          <button class="mode-tab" data-mode="short_break">Short Break</button>
+          <button class="mode-tab" data-mode="long_break">Long Break</button>
+        </div>
+
+        <!-- Linked task pill -->
+        <div class="linked-task-pill hidden" id="linked-task-pill">
+          <span class="linked-task-icon">🔗</span>
+          <span class="linked-task-title" id="linked-task-title">Linked Task</span>
+          <button class="btn-clear-link" id="btn-clear-link" title="Unlink task">&times;</button>
+        </div>
+
+        <!-- Task label input -->
+        <div class="timer-label-wrap">
+          <input type="text" id="timer-label" class="input timer-label-input"
+                 placeholder="What are you working on?" maxlength="120" />
+        </div>
+
+        <!-- SVG ring + time display -->
+        <div class="timer-ring-area">
+          <div class="timer-ring-wrap" id="timer-ring-wrap">
+            <svg class="timer-svg" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
+              <!-- Background track -->
+              <circle class="ring-track"
+                      cx="120" cy="120" r="100"
+                      fill="none" stroke-width="10" />
+              <!-- Animated progress arc -->
+              <circle class="ring-progress" id="ring-progress"
+                      cx="120" cy="120" r="100"
+                      fill="none" stroke-width="10"
+                      stroke-linecap="round"
+                      transform="rotate(-90 120 120)" />
+            </svg>
+
+            <!-- Center content -->
+            <div class="timer-center">
+              <div class="timer-time" id="timer-time">25:00</div>
+              <div class="timer-mode-label" id="timer-mode-label">Focus</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Session dots (up to 4) -->
+        <div class="session-dots" id="session-dots">
+          <div class="session-dot" data-i="0"></div>
+          <div class="session-dot" data-i="1"></div>
+          <div class="session-dot" data-i="2"></div>
+          <div class="session-dot" data-i="3"></div>
+        </div>
+        <div class="session-dot-label" id="session-dot-label">Session 1 of 4</div>
+
+        <!-- Controls -->
+        <div class="timer-controls">
+          <button class="btn-timer-secondary" id="btn-reset" title="Reset timer">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"/>
+              <path d="M3.51 15a9 9 0 1 0 .49-5.36"/>
+            </svg>
+          </button>
+
+          <button class="btn-timer-primary" id="btn-start-pause">
+            <!-- Play icon (default) -->
+            <svg id="icon-play" xmlns="http://www.w3.org/2000/svg" width="26" height="26"
+                 viewBox="0 0 24 24" fill="currentColor" stroke="none">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            <!-- Pause icon (hidden) -->
+            <svg id="icon-pause" xmlns="http://www.w3.org/2000/svg" width="26" height="26"
+                 viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden">
+              <rect x="6" y="4" width="4" height="16"/>
+              <rect x="14" y="4" width="4" height="16"/>
+            </svg>
+          </button>
+
+          <button class="btn-timer-secondary" id="btn-skip" title="Skip to next mode">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="5 4 15 12 5 20 5 4"/>
+              <line x1="19" y1="5" x2="19" y2="19"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Today's focus time stat -->
+        <div class="timer-stat-row">
+          <div class="timer-stat">
+            <span class="timer-stat-value" id="stat-sessions">0</span>
+            <span class="timer-stat-label">sessions today</span>
+          </div>
+          <div class="timer-stat-divider"></div>
+          <div class="timer-stat">
+            <span class="timer-stat-value" id="stat-focus-time">0m</span>
+            <span class="timer-stat-label">focused today</span>
+          </div>
+        </div>
+
+      </div><!-- end timer-panel -->
+
+      <!-- ════ MIDDLE: agenda panel ═════════════════════════ -->
+      <div class="agenda-panel" id="agenda-panel">
+        <div class="agenda-header">
+          <div class="agenda-title">Today's Agenda</div>
+          <div class="agenda-meta text-xs text-muted" id="agenda-date-label"></div>
+        </div>
+        <div class="agenda-tabs" id="agenda-tabs">
+          <button class="agenda-tab active" data-tab="tasks">Tasks</button>
+          <button class="agenda-tab" data-tab="events">Events</button>
+        </div>
+        <div class="agenda-list" id="agenda-list">
+          <!-- Rendered by JS -->
+        </div>
+      </div>
+
+      <!-- ════ RIGHT: log panel ═════════════════════════════ -->
+      <div class="log-panel" id="log-panel">
+
+        <!-- Log header -->
+        <div class="log-header">
+          <div class="log-title">Session Log</div>
+          <div class="log-header-right">
+            <div class="log-filter" id="log-filter">
+              <button class="log-filter-btn active" data-range="today">Today</button>
+              <button class="log-filter-btn" data-range="week">This week</button>
+              <button class="log-filter-btn" data-range="all">All</button>
+            </div>
+            <button class="btn btn-primary btn-sm btn-manual-log" id="btn-manual-log" title="Log session manually">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Log
+            </button>
+          </div>
+        </div>
+
+        <!-- Log list -->
+        <div class="log-list" id="log-list">
+          <!-- Rendered by JS -->
+        </div>
+
+        <!-- Empty state -->
+        <div class="empty-state" id="log-empty" style="display:none">
+          <div class="empty-state-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="1.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+          <div class="empty-state-title">No sessions logged</div>
+          <div class="empty-state-desc">Start a focus session to build your log</div>
+        </div>
+
+        <!-- Log totals -->
+        <div class="log-totals" id="log-totals" style="display:none">
+          <div class="log-total-item">
+            <span class="log-total-value" id="total-sessions-val">0</span>
+            <span class="log-total-label">sessions</span>
+          </div>
+          <div class="log-total-sep">·</div>
+          <div class="log-total-item">
+            <span class="log-total-value" id="total-focus-val">0m</span>
+            <span class="log-total-label">focus time</span>
+          </div>
+        </div>
+
+      </div><!-- end log-panel -->
+
+    </div><!-- end tracker-main -->
+
+  </div><!-- end page-wrapper -->
+
+  <!-- Manual log modal -->
+  <div class="modal-overlay hidden" id="manual-log-modal-overlay">
+    <div class="modal" style="max-width:400px">
+      <div class="modal-header">
+        <div class="modal-title">Log Focus Session</div>
+        <button class="btn btn-ghost btn-icon" id="manual-log-modal-close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="label" for="manual-log-label">What did you work on?</label>
+          <input type="text" id="manual-log-label" class="input" placeholder="Focus session title..." maxlength="120" />
+        </div>
+        <div class="form-group">
+          <label class="label" for="manual-log-link">Link to Task or Event</label>
+          <select id="manual-log-link" class="select">
+            <option value="">-- No link --</option>
+            <!-- Loaded dynamically by JS -->
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="label" for="manual-log-duration">Duration (minutes)</label>
+            <input type="number" id="manual-log-duration" class="input" min="1" max="480" value="25" />
+            <div class="quick-durations" style="display: flex; gap: 4px; margin-top: 6px;">
+              <button type="button" class="btn btn-secondary btn-sm btn-quick-dur" data-dur="15">15m</button>
+              <button type="button" class="btn btn-secondary btn-sm btn-quick-dur" data-dur="25">25m</button>
+              <button type="button" class="btn btn-secondary btn-sm btn-quick-dur" data-dur="50">50m</button>
+              <button type="button" class="btn btn-secondary btn-sm btn-quick-dur" data-dur="90">90m</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="label" for="manual-log-date">Date</label>
+            <input type="date" id="manual-log-date" class="input" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-manual-log-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-manual-log-save">Save Log</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="tracker.js"></script>
+</body>
+</html>

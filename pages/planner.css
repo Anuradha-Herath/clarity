@@ -1,0 +1,637 @@
+/* ============================================================
+   Clarity — pages/planner.css
+   Styles for the 4-tab planner page.
+   ============================================================ */
+
+/* ── Tab panels fill page below tab bar ───────────────────── */
+.tab-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ══════════════════════════════════════════════════════════
+   DAY TAB
+══════════════════════════════════════════════════════════ */
+
+/* Date navigation bar */
+.planner-day-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.day-nav-center {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.day-nav-date {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+
+/* Category pills bar */
+.cat-pills-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 20px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.cat-bar-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+
+/* Day main layout: board (left, 65%) + side (right, 35%) */
+.day-main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+
+.day-board-col {
+  flex: 0 0 65%;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.day-board-wrapper {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.day-side-col {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Priority list */
+.priority-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--space-3);
+  min-height: 20px;
+}
+
+.priority-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--transition);
+}
+
+.priority-item:last-child {
+  border-bottom: none;
+}
+
+.priority-item-check {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.priority-item-title {
+  flex: 1;
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.4;
+  word-break: break-word;
+  cursor: pointer;
+}
+
+.priority-item-title:hover {
+  color: var(--color-accent);
+}
+
+.priority-item-title.done-text {
+  color: var(--color-text-muted);
+}
+
+.priority-item-est {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.priority-item-delete {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transition: opacity var(--transition), background var(--transition);
+}
+
+.priority-item:hover .priority-item-delete {
+  opacity: 1;
+}
+
+.priority-item-delete:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+/* Priority quick-add row */
+.priority-add-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.priority-p-select {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.priority-dot-btn {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color var(--transition), transform var(--transition);
+}
+
+.priority-dot-btn[data-p="1"] { background: var(--color-danger); }
+.priority-dot-btn[data-p="2"] { background: var(--color-warning); }
+.priority-dot-btn[data-p="3"] { background: var(--color-success); }
+
+.priority-dot-btn.active {
+  border-color: var(--color-text);
+  transform: scale(1.2);
+}
+
+/* ══════════════════════════════════════════════════════════
+   WEEK TAB
+══════════════════════════════════════════════════════════ */
+
+.planner-week-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.week-nav-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+/* 7-column grid */
+.week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  border-top: 1px solid var(--color-border);
+  min-width: 700px;
+}
+
+.week-col {
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 400px;
+}
+
+.week-col:last-child {
+  border-right: none;
+}
+
+.week-col-header {
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  transition: background var(--transition);
+  flex-shrink: 0;
+}
+
+.week-col-header:hover {
+  background: var(--color-accent-soft);
+}
+
+.week-col-header.is-today {
+  background: var(--color-accent-soft);
+}
+
+.week-day-name {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 3px;
+}
+
+.week-day-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.week-day-num.is-today-num {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.week-task-list {
+  padding: var(--space-2) var(--space-2);
+  flex: 1;
+  overflow-y: auto;
+}
+
+.week-task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 5px 3px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.week-task-item:last-child {
+  border-bottom: none;
+}
+
+.week-task-check {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.week-task-title {
+  flex: 1;
+  font-size: 12px;
+  color: var(--color-text);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.week-task-title.done-text {
+  color: var(--color-text-muted);
+}
+
+.week-carry-btn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  transition: background var(--transition), color var(--transition);
+  font-family: var(--font-base);
+}
+
+.week-carry-btn:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.week-empty-day {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-align: center;
+  padding: var(--space-4) 0;
+  font-style: italic;
+}
+
+.week-add-row {
+  padding: 4px 8px 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.week-add-input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-base);
+  color: var(--color-text);
+  outline: none;
+  background: var(--color-bg);
+}
+
+.week-add-input::placeholder { color: var(--color-text-muted); }
+.week-add-input:focus { border-color: var(--color-accent); }
+
+.week-add-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--color-accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-family: var(--font-base);
+}
+
+/* ══════════════════════════════════════════════════════════
+   MONTH TAB
+══════════════════════════════════════════════════════════ */
+
+.planner-month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.month-nav-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+/* Day-of-week header row */
+.month-dow-headers {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+
+.month-dow-headers > div {
+  padding: 8px 0;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.month-dow-headers .month-weekend {
+  color: var(--color-danger);
+  opacity: 0.7;
+}
+
+/* Calendar grid */
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  flex: 1;
+  overflow-y: auto;
+  border-left: 1px solid var(--color-border);
+}
+
+.month-day-cell {
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 6px 8px;
+  min-height: 90px;
+  cursor: pointer;
+  background: var(--color-surface);
+  transition: background var(--transition);
+  position: relative;
+}
+
+.month-day-cell:hover {
+  background: var(--color-accent-soft);
+}
+
+.month-day-cell.is-today {
+  background: var(--color-accent-soft);
+}
+
+.month-day-cell.other-month {
+  background: var(--color-bg);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.month-day-cell.other-month:hover {
+  background: var(--color-bg);
+}
+
+.month-day-num {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+.month-day-cell.is-today .month-day-num {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.month-day-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.month-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.month-badge-tasks {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.month-badge-blocks {
+  background: var(--cat-personal-bg);
+  color: var(--cat-personal-text);
+}
+
+/* ══════════════════════════════════════════════════════════
+   YEAR TAB
+══════════════════════════════════════════════════════════ */
+
+.planner-year-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.year-nav-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.year-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-6) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* Quarterly section */
+.year-quarter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.year-quarter-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.year-q-label {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--color-accent);
+  letter-spacing: -0.02em;
+  flex-shrink: 0;
+  width: 36px;
+}
+
+.year-q-milestone {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Month cards row */
+.year-month-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+  padding-left: 52px; /* indent under Q label */
+}
+
+.year-month-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  transition: border-color var(--transition);
+}
+
+.year-month-card:hover {
+  border-color: var(--color-accent);
+}
+
+.year-month-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.year-month-theme {
+  font-size: 13px;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .day-main {
+    flex-direction: column;
+  }
+  .day-board-col {
+    flex: 0 0 500px;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .day-side-col {
+    overflow-y: visible;
+  }
+  .year-month-cards {
+    grid-template-columns: repeat(3, 1fr);
+    padding-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .year-month-cards {
+    grid-template-columns: 1fr;
+  }
+}

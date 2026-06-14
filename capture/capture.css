@@ -1,0 +1,183 @@
+/* ============================================================
+   Clarity — capture/capture.css
+   Styles scoped to the quick-capture mini popup (400 × 180px).
+   ============================================================ */
+
+/* ── Shell ────────────────────────────────────────────────── */
+html, body {
+  width: 400px;
+  height: 180px;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.capture-shell {
+  width: 400px;
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+/* ── Header ───────────────────────────────────────────────── */
+.capture-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.capture-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.capture-brand .brand-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--color-accent);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+#btn-close {
+  color: var(--color-text-muted);
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background var(--transition), color var(--transition);
+}
+#btn-close:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+/* ── Input ────────────────────────────────────────────────── */
+.capture-input-wrap {
+  padding: 8px 12px 6px;
+  flex-shrink: 0;
+}
+
+.capture-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-input);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 14px;
+  font-family: var(--font-base);
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+.capture-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.capture-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+  background: var(--color-surface);
+}
+
+/* ── Route buttons ────────────────────────────────────────── */
+.capture-routes {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px 10px;
+  flex-shrink: 0;
+}
+
+.route-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border-radius: var(--radius-input);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-family: var(--font-base);
+  white-space: nowrap;
+  transition: background var(--transition), color var(--transition),
+              border-color var(--transition);
+  position: relative;
+}
+
+.route-btn:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.route-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.2);
+}
+
+/* Enter-key hint badge on "Today" button */
+.route-hint {
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: 3px;
+  padding: 1px 3px;
+  line-height: 1.2;
+}
+
+#route-today {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+#route-today:hover {
+  background: var(--color-accent);
+  color: #fff;
+}
+#route-today:hover .route-hint {
+  background: rgba(255,255,255,0.25);
+  color: #fff;
+}
+
+#route-someday:hover  { background: var(--cat-break-bg);    color: var(--cat-break-text);    border-color: var(--cat-break-acc); }
+#route-goal:hover     { background: var(--cat-personal-bg); color: var(--cat-personal-text); border-color: var(--cat-personal-acc); }
+#route-vision:hover   { background: var(--cat-learning-bg); color: var(--cat-learning-text); border-color: var(--cat-learning-acc); }
+
+/* ── Status flash ─────────────────────────────────────────── */
+.capture-status {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-success);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 300ms ease;
+}
+.capture-status.hidden {
+  display: none;
+}

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — Clarity</title>
+  <meta name="description" content="Today's time blocks, tasks, and capture inbox at a glance." />
+  <link rel="stylesheet" href="../shared/style.css" />
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <div class="page-wrapper dash-wrapper">
+
+    <!-- ── Header ─────────────────────────────────────────── -->
+    <header class="page-header">
+      <div class="header-brand">
+        <div class="brand-dot"></div>
+        Clarity
+      </div>
+      <div class="dash-header-center" id="dash-date-greeting">
+        <!-- date + greeting injected by JS -->
+      </div>
+      <nav class="header-nav">
+        <a href="dashboard.html" class="nav-link active">Dashboard</a>
+        <a href="planner.html"   class="nav-link">Planner</a>
+        <a href="vision.html"    class="nav-link">Vision</a>
+        <a href="tracker.html"   class="nav-link">Tracker</a>
+      </nav>
+    </header>
+
+    <!-- ── Main two-column layout ─────────────────────────── -->
+    <div class="dash-main">
+
+      <!-- ════ LEFT: time board (60%) ═══════════════════ -->
+      <div class="dash-left">
+
+        <!-- Category selection pills -->
+        <div class="dash-cat-bar" id="dash-cat-bar">
+          <span class="cat-bar-label">Category:</span>
+          <div class="cat-pill selected" data-cat="Deep Work">Deep Work</div>
+          <div class="cat-pill" data-cat="Meetings">Meetings</div>
+          <div class="cat-pill" data-cat="Health">Health</div>
+          <div class="cat-pill" data-cat="Learning">Learning</div>
+          <div class="cat-pill" data-cat="Personal">Personal</div>
+          <div class="cat-pill" data-cat="Break">Break</div>
+          <span class="dash-cat-hint">Drag grid to create a block</span>
+        </div>
+
+        <!-- Timeboard mount target -->
+        <div class="dash-board-wrap" id="dash-board-wrap">
+          <!-- mountTimeboard() injects here -->
+        </div>
+
+      </div><!-- end dash-left -->
+
+      <!-- ════ RIGHT: tasks + inbox + progress (40%) ════ -->
+      <div class="dash-right" id="dash-right">
+
+        <!-- ── Today's tasks ─────────────────────────── -->
+        <div class="card dash-card" id="dash-tasks-card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2.5"
+                   stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-accent)">
+                <polyline points="9 11 12 14 22 4"/>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+              </svg>
+              Today's Tasks
+            </div>
+            <a href="planner.html" class="text-sm text-accent">View all →</a>
+          </div>
+
+          <!-- Task list (top 3 by priority) -->
+          <div id="dash-task-list" class="dash-task-list">
+            <!-- Rendered by JS -->
+          </div>
+
+          <!-- Quick add -->
+          <div class="dash-task-add-row">
+            <input type="text" id="dash-task-input" class="input input-sm"
+                   placeholder="Quick-add a task…" maxlength="200" />
+            <button class="btn btn-primary btn-sm" id="btn-dash-add-task">Add</button>
+          </div>
+        </div>
+
+        <!-- ── Capture inbox ──────────────────────────── -->
+        <div class="card dash-card" id="dash-inbox-card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2.5"
+                   stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-warning)">
+                <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
+                <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+              </svg>
+              Capture Inbox
+            </div>
+            <span class="badge badge-accent" id="inbox-count-badge" style="display:none">0</span>
+          </div>
+
+          <div id="dash-inbox-list" class="dash-inbox-list">
+            <!-- Rendered by JS -->
+          </div>
+
+          <div class="empty-state hidden" id="dash-inbox-empty" style="padding:20px 0">
+            <div class="empty-state-icon" style="opacity:0.3">
+              <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="1.5"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </div>
+            <div class="empty-state-title" style="font-size:13px">Inbox clear 🎉</div>
+          </div>
+        </div>
+
+        <!-- ── Weekly progress ────────────────────────── -->
+        <div class="card dash-card" id="dash-progress-card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-success)">
+                <line x1="18" y1="20" x2="18" y2="10"/>
+                <line x1="12" y1="20" x2="12" y2="4"/>
+                <line x1="6" y1="20" x2="6" y2="14"/>
+              </svg>
+              This Week
+            </div>
+            <span class="text-sm text-muted" id="week-progress-label">0/0 done</span>
+          </div>
+
+          <!-- Aggregate bar -->
+          <div class="progress-track mb-3" style="height:8px">
+            <div class="progress-fill" id="week-progress-fill" style="width:0%"></div>
+          </div>
+
+          <!-- Per-day mini bars -->
+          <div class="week-mini-bars" id="week-mini-bars">
+            <!-- 7 bars rendered by JS -->
+          </div>
+        </div>
+
+      </div><!-- end dash-right -->
+    </div><!-- end dash-main -->
+
+  </div><!-- end page-wrapper -->
+
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>
