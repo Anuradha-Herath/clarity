@@ -86,6 +86,24 @@
         <!-- Side panel -->
         <div class="day-side-col">
 
+          <!-- Daily Progress Card -->
+          <div class="card mb-4 daily-progress-card hidden" id="daily-progress-card">
+            <div class="card-body progress-card-layout" style="display: flex; align-items: center; gap: 16px; padding: 16px;">
+              <div class="progress-ring-container" style="position: relative; width: 64px; height: 64px; flex-shrink: 0;">
+                <svg class="progress-ring" width="64" height="64">
+                  <circle class="progress-ring-circle-bg" stroke="var(--color-border)" stroke-width="5" fill="transparent" r="26" cx="32" cy="32"/>
+                  <circle class="progress-ring-circle" id="daily-progress-circle" stroke="var(--color-success)" stroke-width="5" fill="transparent" r="26" cx="32" cy="32" style="stroke-dasharray: 163.36; stroke-dashoffset: 163.36; transform: rotate(-90deg); transform-origin: 32px 32px; transition: stroke-dashoffset 0.35s; stroke-linecap: round;"/>
+                </svg>
+                <div class="progress-ring-text" id="daily-progress-percent" style="position: absolute; top: 0; left: 0; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: var(--color-text);">0%</div>
+              </div>
+              <div class="progress-card-info" style="flex: 1; display: flex; flex-direction: column; gap: 2px;">
+                <div class="progress-card-title" style="font-size: 14px; font-weight: 700; color: var(--color-text);">Today's Progress</div>
+                <div class="progress-card-ratio" id="daily-progress-ratio" style="font-size: 12px; color: var(--color-text-muted);">0 of 0 completed</div>
+                <div class="progress-card-message" id="daily-progress-message" style="font-size: 11px; font-style: italic; color: var(--color-accent); line-height: 1.3; margin-top: 2px;">A fresh day! Let's conquer the first task! 🚀</div>
+              </div>
+            </div>
+          </div>
+
           <!-- Top 3 Priorities -->
           <div class="card mb-4">
             <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
@@ -173,6 +191,12 @@
           Prev week
         </button>
         <div class="week-nav-title" id="week-nav-title">Jun 9 – Jun 15, 2026</div>
+        <div class="week-progress-container" style="display: flex; align-items: center; gap: 8px; flex: 0 1 300px; margin: 0 16px;">
+          <span id="week-progress-text" style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); white-space: nowrap;">Progress: 0%</span>
+          <div class="week-progress-bar-bg" style="flex: 1; height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; position: relative;">
+            <div id="week-progress-bar-fill" class="week-progress-bar-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-success) 100%); transition: width 0.35s ease; border-radius: 3px;"></div>
+          </div>
+        </div>
         <button class="btn btn-ghost btn-sm" id="btn-next-week">
           Next week
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"

@@ -64,6 +64,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   let dragCreate = null; // { startHour, endHour, ghost }
   let dragResize = null; // { block, el, currentEnd }
   let dragMove   = null; // { block, el, startY, blockStart, duration, hasMoved }
+  let ignoreNextClick = false;
 
   // ── Build board skeleton ────────────────────────────────────────────────────
   containerEl.innerHTML = '';
@@ -186,6 +187,10 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
  
     // Click → edit modal
     el.addEventListener('click', (e) => {
+      if (ignoreNextClick) {
+        ignoreNextClick = false;
+        return;
+      }
       if (e.target.dataset.resizeHandle !== undefined || e.target.closest('[data-drag-handle]')) return;
       e.stopPropagation();
       openBlockModal(b, false);
@@ -316,6 +321,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     }
 
     if (dragMove) {
+      ignoreNextClick = true;
       const deltaY = e.clientY - dragMove.startY;
       const deltaHours = deltaY / PX_PER_HOUR;
       let newStart = snapHour(clampH(dragMove.blockStart + deltaHours));

@@ -827,6 +827,112 @@
   color: var(--color-text) !important;
 }
 
+/* ── Progress & Completion Enhancements ────────────────── */
+.daily-progress-card {
+  background: linear-gradient(135deg, var(--color-surface) 0%, var(--color-accent-soft) 100%) !important;
+  border: 1px solid rgba(79, 70, 229, 0.15) !important;
+  box-shadow: 0 4px 20px -2px rgba(79, 70, 229, 0.08) !important;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.daily-progress-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px -2px rgba(79, 70, 229, 0.12) !important;
+}
+
+.daily-progress-card.is-complete {
+  background: linear-gradient(135deg, var(--color-surface) 0%, var(--color-success-soft) 100%) !important;
+  border: 1px solid rgba(22, 163, 74, 0.2) !important;
+}
+
+.daily-progress-card.is-complete #daily-progress-percent {
+  color: var(--color-success) !important;
+}
+
+/* Week Day Header Progress */
+.week-col-header {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: 8px !important;
+}
+
+.week-day-progress-bar-bg {
+  width: 80%;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 2px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.week-day-progress-bar-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+
+.week-day-progress-bar-fill.completed {
+  background: var(--color-success);
+  box-shadow: 0 0 4px rgba(22, 163, 74, 0.4);
+}
+
+/* Month View Day Cell Progress Badge */
+.month-day-progress-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  margin-top: 4px;
+  transition: all var(--transition);
+}
+
+.month-day-progress-badge.completed {
+  background: var(--color-success-soft);
+  border-color: rgba(22, 163, 74, 0.3);
+  color: var(--color-success);
+  box-shadow: 0 0 6px rgba(22, 163, 74, 0.15);
+}
+
+/* Year Month Goal Progress */
+.year-month-progress-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 8px 0;
+}
+
+.year-month-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.year-month-progress-bar-bg {
+  width: 100%;
+  height: 4px;
+  background: var(--color-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.year-month-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-success) 100%);
+  border-radius: 2px;
+  transition: width 0.35s ease;
+}
+
 /* ── Responsive ─────────────────────────────────────────── */
 @media (max-width: 900px) {
   .day-main {
@@ -841,7 +947,7 @@
     overflow-y: visible;
   }
   .year-month-cards {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     padding-left: 0;
   }
 }

@@ -235,6 +235,11 @@ categoryFilter.addEventListener('change', () => {
 
 async function renderPriorityList() {
   const tasks = await getTasks(currentDate);
+  // Update progress card
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter(t => t.done).length;
+  updateDailyProgressCard(totalTasks, completedTasks);
+
   // Sort: priority asc, then undone before done
   const sorted = [...tasks].sort((a, b) => {
     if (a.done !== b.done) return a.done ? 1 : -1;
@@ -348,7 +353,22 @@ async function renderPriorityList() {
   // Checkbox toggle
   priorityList.querySelectorAll('.priority-item-check').forEach((cb) => {
     cb.addEventListener('change', async () => {
-      await updateTask(currentDate, cb.dataset.id, { done: cb.checked });
+      const isChecked = cb.checked;
+      const taskId = cb.dataset.id;
+      const tasks = await getTasks(currentDate);
+      
+      const totalBefore = tasks.length;
+      const completedBefore = tasks.filter(t => t.done).length;
+
+      await updateTask(currentDate, taskId, { done: isChecked });
+      
+      const updatedTasks = await getTasks(currentDate);
+      const completedAfter = updatedTasks.filter(t => t.done).length;
+      
+      if (isChecked && completedAfter === totalBefore && completedBefore < totalBefore && totalBefore > 0) {
+        triggerConfettiCelebration();
+      }
+
       await renderPriorityList();
     });
   });
@@ -358,13 +378,26 @@ async function renderPriorityList() {
     cb.addEventListener('change', async () => {
       const taskId = cb.dataset.taskId;
       const subId = cb.dataset.subId;
+      const isChecked = cb.checked;
       const tasks = await getTasks(currentDate);
+      
+      const totalBefore = tasks.length;
+      const completedBefore = tasks.filter(t => t.done).length;
+
       const t = tasks.find(x => x.id === taskId);
       if (t && t.subtasks) {
         const sub = t.subtasks.find(s => s.id === subId);
         if (sub) {
-          sub.done = cb.checked;
+          sub.done = isChecked;
           await updateTask(currentDate, taskId, { subtasks: t.subtasks });
+          
+          const updatedTasks = await getTasks(currentDate);
+          const completedAfter = updatedTasks.filter(t => t.done).length;
+          
+          if (isChecked && completedAfter === totalBefore && completedBefore < totalBefore && totalBefore > 0) {
+            triggerConfettiCelebration();
+          }
+
           await renderPriorityList();
         }
       }
@@ -790,6 +823,21 @@ async function renderWeekTab() {
   // Load tasks for all 7 days in parallel
   const tasksByDay = await Promise.all(dates.map((d) => getTasks(d)));
 
+  // Calculate and update weekly progress
+  let totalWeeklyTasks = 0;
+  let completedWeeklyTasks = 0;
+  tasksByDay.forEach(dayTasks => {
+    totalWeeklyTasks += dayTasks.length;
+    completedWeeklyTasks += dayTasks.filter(t => t.done).length;
+  });
+  const weeklyPercent = totalWeeklyTasks > 0 ? Math.round((completedWeeklyTasks / totalWeeklyTasks) * 100) : 0;
+  const weekProgressText = document.getElementById('week-progress-text');
+  const weekProgressBarFill = document.getElementById('week-progress-bar-fill');
+  if (weekProgressText && weekProgressBarFill) {
+    weekProgressText.textContent = `Progress: ${weeklyPercent}% (${completedWeeklyTasks}/${totalWeeklyTasks})`;
+    weekProgressBarFill.style.width = `${weeklyPercent}%`;
+  }
+
   weekGrid.innerHTML = '';
 
   const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -806,10 +854,19 @@ async function renderWeekTab() {
     const hdrClass = `week-col-header${isToday ? ' is-today' : ''}`;
     const numClass = `week-day-num${isToday ? ' is-today-num' : ''}`;
 
+    const dayTotal = tasks.length;
+    const dayCompleted = tasks.filter(t => t.done).length;
+    const dayPercent = dayTotal > 0 ? Math.round((dayCompleted / dayTotal) * 100) : 0;
+
     col.innerHTML = `
       <div class="${hdrClass}" data-date="${date}">
         <span class="week-day-name">${DAY_LABELS[i]}</span>
         <span class="${numClass}">${dateNum}</span>
+        ${dayTotal > 0 ? `
+          <div class="week-day-progress-bar-bg" title="${dayCompleted} of ${dayTotal} tasks completed">
+            <div class="week-day-progress-bar-fill ${dayPercent === 100 ? 'completed' : ''}" style="width: ${dayPercent}%"></div>
+          </div>
+        ` : ''}
       </div>
       <div class="week-task-list" id="wt-${date}"></div>
       <div class="week-add-row">
@@ -976,10 +1033,16 @@ async function renderMonthTab() {
     const cell = document.createElement('div');
     cell.className = `month-day-cell${isToday ? ' is-today' : ''}${!current ? ' other-month' : ''}`;
 
+    const isCompleted = counts.tasks > 0 && counts.done === counts.tasks;
+
     cell.innerHTML = `
       <div class="month-day-num">${dateNum}</div>
       <div class="month-day-badges">
-        ${counts.tasks > 0 ? `<span class="month-badge month-badge-tasks">${counts.done}/${counts.tasks} tasks</span>` : ''}
+        ${counts.tasks > 0 ? `
+          <span class="month-day-progress-badge ${isCompleted ? 'completed' : ''}" title="${counts.done} of ${counts.tasks} tasks completed">
+            ${isCompleted ? '✓ Done' : `${counts.done}/${counts.tasks} tasks`}
+          </span>
+        ` : ''}
         ${counts.blocks > 0 ? `<span class="month-badge month-badge-blocks">${counts.blocks} block${counts.blocks > 1 ? 's' : ''}</span>` : ''}
       </div>
     `;
@@ -1112,6 +1175,10 @@ async function renderYearTab() {
 
       card.appendChild(monthHeader);
 
+      const progressContainer = document.createElement('div');
+      progressContainer.className = 'year-month-progress-container';
+      card.appendChild(progressContainer);
+
       const goalsContainer = document.createElement('div');
       goalsContainer.className = 'year-month-goals-list';
 
@@ -1121,8 +1188,30 @@ async function renderYearTab() {
         return { text: g.text ?? '', completed: !!g.completed };
       });
 
+      const updateMonthProgressVisual = (currentGoals) => {
+        const total = currentGoals.length;
+        const completed = currentGoals.filter(g => g.completed).length;
+        const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+        
+        if (total === 0) {
+          progressContainer.innerHTML = '';
+          return;
+        }
+
+        progressContainer.innerHTML = `
+          <div class="year-month-progress-meta">
+            <span>Goals Progress</span>
+            <span>${completed}/${total} (${percent}%)</span>
+          </div>
+          <div class="year-month-progress-bar-bg">
+            <div class="year-month-progress-bar-fill" style="width: ${percent}%"></div>
+          </div>
+        `;
+      };
+
       const renderGoals = (currentGoals) => {
         goalsContainer.innerHTML = '';
+        updateMonthProgressVisual(currentGoals);
         currentGoals.forEach((goalObj, gIdx) => {
           const goalText = goalObj.text;
           const isCompleted = goalObj.completed;
@@ -1249,6 +1338,117 @@ async function renderYearTab() {
 
     section.appendChild(cardsRow);
     yearContent.appendChild(section);
+  }
+}
+
+// ─── Progress Helpers & Confetti ────────────────────────────────────────────────
+function triggerConfettiCelebration() {
+  let canvas = document.getElementById('confetti-canvas');
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    canvas.id = 'confetti-canvas';
+    canvas.style.position = 'fixed';
+    canvas.style.top = '0';
+    canvas.style.left = '0';
+    canvas.style.width = '100vw';
+    canvas.style.height = '100vh';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.zIndex = '10000';
+    document.body.appendChild(canvas);
+  }
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  const colors = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#3B82F6'];
+  const particles = [];
+  for (let i = 0; i < 80; i++) {
+    particles.push({
+      x: canvas.width / 2 + (Math.random() - 0.5) * 60,
+      y: canvas.height * 0.4 + (Math.random() - 0.5) * 60,
+      vx: (Math.random() - 0.5) * 16,
+      vy: (Math.random() - 0.5) * 16 - 6,
+      r: Math.random() * 4 + 4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      opacity: 1,
+      rotation: Math.random() * 360,
+      rotationSpeed: (Math.random() - 0.5) * 8
+    });
+  }
+
+  let animationId;
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let active = false;
+    particles.forEach(p => {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.25; // gravity
+      p.vx *= 0.98; // friction
+      p.opacity -= 0.015;
+      p.rotation += p.rotationSpeed;
+
+      if (p.opacity > 0) {
+        active = true;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rotation * Math.PI / 180);
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.opacity;
+        ctx.fillRect(-p.r, -p.r, p.r * 2, p.r * 2);
+        ctx.restore();
+      }
+    });
+
+    if (active) {
+      animationId = requestAnimationFrame(draw);
+    } else {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      cancelAnimationFrame(animationId);
+    }
+  }
+  draw();
+}
+
+function updateDailyProgressCard(total, completed) {
+  const card = document.getElementById('daily-progress-card');
+  if (!card) return;
+  
+  if (total === 0) {
+    card.classList.add('hidden');
+    return;
+  }
+  
+  card.classList.remove('hidden');
+  const percent = Math.round((completed / total) * 100);
+  
+  document.getElementById('daily-progress-percent').textContent = `${percent}%`;
+  
+  const circle = document.getElementById('daily-progress-circle');
+  if (circle) {
+    const radius = parseFloat(circle.getAttribute('r') || '26');
+    const circumference = 2 * Math.PI * radius; // ~163.36
+    const offset = circumference - (percent / 100) * circumference;
+    circle.style.strokeDashoffset = offset;
+  }
+  
+  document.getElementById('daily-progress-ratio').textContent = `${completed} of ${total} completed`;
+  
+  const messageEl = document.getElementById('daily-progress-message');
+  if (messageEl) {
+    if (percent === 100) {
+      messageEl.textContent = "Absolute legend! All tasks completed today! 🎉";
+      card.classList.add('is-complete');
+    } else if (percent >= 50) {
+      messageEl.textContent = "Over halfway there! You're doing amazing! ✨";
+      card.classList.remove('is-complete');
+    } else if (percent > 0) {
+      messageEl.textContent = "Good start! Keep the momentum going! 💪";
+      card.classList.remove('is-complete');
+    } else {
+      messageEl.textContent = "A fresh day! Let's conquer the first task! 🚀";
+      card.classList.remove('is-complete');
+    }
   }
 }
 
