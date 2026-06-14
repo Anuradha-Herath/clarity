@@ -156,6 +156,8 @@ export async function get(key) {
 export async function set(key, value) {
   try {
     await chrome.storage.local.set({ [key]: value });
+    // Sync to cloud in the background (fire-and-forget)
+    syncToCloud(key, value);
   } catch (err) {
     console.error(`[Clarity Storage] set("${key}") failed:`, err);
     throw err;
@@ -172,6 +174,8 @@ export async function set(key, value) {
 export async function clear(key) {
   try {
     await chrome.storage.local.remove(key);
+    // Sync deletion to cloud in the background
+    deleteFromCloud(key);
   } catch (err) {
     console.error(`[Clarity Storage] clear("${key}") failed:`, err);
     throw err;
@@ -658,3 +662,231 @@ export async function getWeeklyTimeStats(days = 7) {
   }
   return results;
 }
+
+// ─── Firebase Auth & Sync REST API Integration ──────────────────────────────────
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAWpNPhuyP6fkd6UlK_6SFLVSFiOtqU6Gg",
+  authDomain: "clarity-app-b599e.firebaseapp.com",
+  projectId: "clarity-app-b599e",
+  storageBucket: "clarity-app-b599e.firebasestorage.app",
+  messagingSenderId: "778165477935",
+  appId: "1:778165477935:web:91d1f577bba63f6f8ddcda",
+  measurementId: "G-05JJY37MZJ"
+};
+
+const FIRESTORE_REST_BASE = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents`;
+
+/**
+ * Get current Firebase Auth state, refreshing token if necessary.
+ * @returns {Promise<object|null>}
+ */
+export async function getAuth() {
+  try {
+    // We use chrome.storage.local directly to bypass sync loops
+    const result = await chrome.storage.local.get('firebase_auth');
+    const auth = result.firebase_auth;
+    if (!auth) return null;
+
+    const now = Date.now();
+    // Refresh token if expired or expiring in next 5 minutes
+    if (auth.expiresAt && now > auth.expiresAt - 5 * 60 * 1000) {
+      const url = `https://securetoken.googleapis.com/v1/token?key=${firebaseConfig.apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `grant_type=refresh_token&refresh_token=${auth.refreshToken}`
+      });
+      if (res.ok) {
+        const data = await res.json();
+        auth.idToken = data.id_token;
+        auth.refreshToken = data.refresh_token;
+        auth.expiresAt = Date.now() + parseInt(data.expires_in) * 1000;
+        await chrome.storage.local.set({ firebase_auth: auth });
+      } else {
+        console.warn('[Sync] Auth session expired and refresh failed. Signing out.');
+        await chrome.storage.local.remove('firebase_auth');
+        return null;
+      }
+    }
+    return auth;
+  } catch (err) {
+    console.error('[Sync] Error getting auth session:', err);
+    return null;
+  }
+}
+
+/**
+ * Sign up a new user using Firebase Auth REST API.
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<object>} Auth data
+ */
+export async function signUp(email, password) {
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, returnSecureToken: true })
+  });
+  if (!res.ok) {
+    const errorData = await res.json();
+    throw new Error(errorData.error?.message || 'Failed to sign up');
+  }
+  const data = await res.json();
+  const auth = {
+    email: data.email,
+    localId: data.localId,
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    expiresAt: Date.now() + parseInt(data.expiresIn) * 1000
+  };
+  await chrome.storage.local.set({ firebase_auth: auth });
+  
+  // Pull existing cloud data if any
+  await pullLatestFromCloud();
+  return auth;
+}
+
+/**
+ * Sign in an existing user using Firebase Auth REST API.
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<object>} Auth data
+ */
+export async function signIn(email, password) {
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${firebaseConfig.apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, returnSecureToken: true })
+  });
+  if (!res.ok) {
+    const errorData = await res.json();
+    throw new Error(errorData.error?.message || 'Failed to sign in');
+  }
+  const data = await res.json();
+  const auth = {
+    email: data.email,
+    localId: data.localId,
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    expiresAt: Date.now() + parseInt(data.expiresIn) * 1000
+  };
+  await chrome.storage.local.set({ firebase_auth: auth });
+  
+  // Pull existing cloud data
+  await pullLatestFromCloud();
+  return auth;
+}
+
+/**
+ * Sign out the current user.
+ */
+export async function signOut() {
+  await chrome.storage.local.remove('firebase_auth');
+}
+
+/**
+ * Push a key-value update to Firestore.
+ * @param {string} key
+ * @param {any} value
+ */
+export async function syncToCloud(key, value) {
+  if (key === 'firebase_auth' || key === 'storage_size_info') return;
+
+  const auth = await getAuth();
+  if (!auth) return;
+
+  try {
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data/${key}`;
+    const fields = {
+      value: { stringValue: JSON.stringify(value) },
+      updatedAt: { integerValue: Date.now().toString() }
+    };
+
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${auth.idToken}`
+      },
+      body: JSON.stringify({ fields })
+    });
+    if (!res.ok) {
+      console.warn(`[Sync] Cloud write failed for key ${key}:`, await res.text());
+    }
+  } catch (err) {
+    console.error(`[Sync] Cloud write network error for key ${key}:`, err);
+  }
+}
+
+/**
+ * Delete a key from Firestore.
+ * @param {string} key
+ */
+export async function deleteFromCloud(key) {
+  if (key === 'firebase_auth' || key === 'storage_size_info') return;
+
+  const auth = await getAuth();
+  if (!auth) return;
+
+  try {
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data/${key}`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${auth.idToken}`
+      }
+    });
+    if (!res.ok) {
+      console.warn(`[Sync] Cloud delete failed for key ${key}:`, await res.text());
+    }
+  } catch (err) {
+    console.error(`[Sync] Cloud delete network error for key ${key}:`, err);
+  }
+}
+
+/**
+ * Pull all data documents from Firestore and populate local storage.
+ */
+export async function pullLatestFromCloud() {
+  const auth = await getAuth();
+  if (!auth) return;
+
+  try {
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data`;
+    const res = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${auth.idToken}`
+      }
+    });
+    if (!res.ok) {
+      // If collection doesn't exist yet, it returns 404/not found. That's fine.
+      if (res.status === 404) return;
+      console.warn('[Sync] Pull from cloud failed:', await res.text());
+      return;
+    }
+    const data = await res.json();
+    if (!data.documents) {
+      return;
+    }
+
+    for (const doc of data.documents) {
+      const parts = doc.name.split('/');
+      const key = parts[parts.length - 1];
+      const fields = doc.fields;
+      if (fields && fields.value && fields.value.stringValue) {
+        try {
+          const parsedVal = JSON.parse(fields.value.stringValue);
+          await chrome.storage.local.set({ [key]: parsedVal });
+        } catch (e) {
+          console.error(`[Sync] Error parsing value for pulled key "${key}":`, e);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Sync] Error pulling from cloud:', err);
+  }
+}
+

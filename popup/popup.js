@@ -15,6 +15,11 @@ import {
   trackedHoursForDate,
   checkStorageSize,
   todayKey,
+  getAuth,
+  signUp,
+  signIn,
+  signOut,
+  pullLatestFromCloud,
 } from '../shared/storage.js';
 
 // ─── Page URLs ─────────────────────────────────────────────────────────────────
@@ -45,6 +50,18 @@ const setNight        = document.getElementById('set-night');
 const storageUsed     = document.getElementById('storage-used');
 const storageWarning  = document.getElementById('storage-warning');
 const btnSaveSettings = document.getElementById('btn-save-settings');
+
+// Cloud Sync Element refs
+const syncLoggedOut = document.getElementById('sync-logged-out');
+const syncLoggedIn  = document.getElementById('sync-logged-in');
+const syncEmail      = document.getElementById('sync-email');
+const syncPassword   = document.getElementById('sync-password');
+const syncError      = document.getElementById('sync-error');
+const btnSyncSignin  = document.getElementById('btn-sync-signin');
+const btnSyncSignup  = document.getElementById('btn-sync-signup');
+const syncUserEmail  = document.getElementById('sync-user-email');
+const btnSyncSignout = document.getElementById('btn-sync-signout');
+const btnSyncNow     = document.getElementById('btn-sync-now');
 
 // Nav cards
 const navDashboard = document.getElementById('nav-dashboard');
@@ -197,8 +214,30 @@ async function renderSettingsPanel() {
     } else {
       storageWarning.classList.add('hidden');
     }
+
+    // Render Cloud Sync auth panel
+    await renderAuthPanel();
   } catch (err) {
     console.error('[Popup] renderSettingsPanel error:', err);
+  }
+}
+
+async function renderAuthPanel() {
+  try {
+    const auth = await getAuth();
+    if (auth) {
+      syncLoggedOut.classList.add('hidden');
+      syncLoggedIn.classList.remove('hidden');
+      syncUserEmail.textContent = auth.email;
+    } else {
+      syncLoggedOut.classList.remove('hidden');
+      syncLoggedIn.classList.add('hidden');
+      syncEmail.value = '';
+      syncPassword.value = '';
+      syncError.style.display = 'none';
+    }
+  } catch (err) {
+    console.error('[Popup] renderAuthPanel error:', err);
   }
 }
 
@@ -292,6 +331,90 @@ btnSettingsClose.addEventListener('click', () => {
 });
 
 btnSaveSettings.addEventListener('click', saveSettings);
+
+// ─── Cloud Sync Events ────────────────────────────────────────────────────────
+btnSyncSignin.addEventListener('click', async () => {
+  const email = syncEmail.value.trim();
+  const password = syncPassword.value;
+  if (!email || !password) {
+    showSyncError('Please enter email and password.');
+    return;
+  }
+  btnSyncSignin.disabled = true;
+  btnSyncSignin.textContent = 'Signing in...';
+  syncError.style.display = 'none';
+  try {
+    await signIn(email, password);
+    await renderAuthPanel();
+    await init(); // Refresh stats/inbox display
+  } catch (err) {
+    showSyncError(err.message);
+  } finally {
+    btnSyncSignin.disabled = false;
+    btnSyncSignin.textContent = 'Sign In';
+  }
+});
+
+btnSyncSignup.addEventListener('click', async () => {
+  const email = syncEmail.value.trim();
+  const password = syncPassword.value;
+  if (!email || !password) {
+    showSyncError('Please enter email and password.');
+    return;
+  }
+  btnSyncSignup.disabled = true;
+  btnSyncSignup.textContent = 'Registering...';
+  syncError.style.display = 'none';
+  try {
+    await signUp(email, password);
+    await renderAuthPanel();
+    await init();
+  } catch (err) {
+    showSyncError(err.message);
+  } finally {
+    btnSyncSignup.disabled = false;
+    btnSyncSignup.textContent = 'Register';
+  }
+});
+
+btnSyncSignout.addEventListener('click', async () => {
+  await signOut();
+  await renderAuthPanel();
+  await init();
+});
+
+btnSyncNow.addEventListener('click', async () => {
+  btnSyncNow.disabled = true;
+  btnSyncNow.textContent = 'Syncing...';
+  try {
+    await pullLatestFromCloud();
+    btnSyncNow.textContent = 'Synced ✓';
+    await init();
+    setTimeout(() => {
+      btnSyncNow.textContent = 'Sync Now';
+      btnSyncNow.disabled = false;
+    }, 1500);
+  } catch (err) {
+    console.error('[Sync] Manual sync failed:', err);
+    btnSyncNow.textContent = 'Sync Failed';
+    setTimeout(() => {
+      btnSyncNow.textContent = 'Sync Now';
+      btnSyncNow.disabled = false;
+    }, 1500);
+  }
+});
+
+function showSyncError(msg) {
+  let displayMsg = msg;
+  if (msg === 'EMAIL_EXISTS') displayMsg = 'Email already registered.';
+  else if (msg === 'INVALID_PASSWORD') displayMsg = 'Invalid password.';
+  else if (msg === 'EMAIL_NOT_FOUND' || msg === 'INVALID_LOGIN_CREDENTIALS') displayMsg = 'Incorrect email or password.';
+  else if (msg === 'INVALID_EMAIL') displayMsg = 'Invalid email address format.';
+  else if (msg.includes('WEAK_PASSWORD')) displayMsg = 'Password must be at least 6 characters.';
+
+  syncError.textContent = displayMsg;
+  syncError.style.display = 'block';
+}
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {

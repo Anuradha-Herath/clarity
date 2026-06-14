@@ -195,6 +195,41 @@
         </div>
 
         <button class="btn btn-primary w-full" id="btn-save-settings">Save settings</button>
+
+        <!-- Cloud Sync Section -->
+        <hr style="border: 0; border-top: 1px solid var(--color-border); margin: 6px 0;" />
+
+        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px;">
+          Cloud Sync
+        </div>
+
+        <!-- Logged Out View -->
+        <div id="sync-logged-out" class="hidden" style="display: flex; flex-direction: column; gap: 8px;">
+          <div class="form-group">
+            <label class="label" for="sync-email" style="font-size: 11px; margin-bottom: 4px; display: block;">Email</label>
+            <input type="email" id="sync-email" class="input input-sm" placeholder="your@email.com" />
+          </div>
+          <div class="form-group" style="margin-top: 4px;">
+            <label class="label" for="sync-password" style="font-size: 11px; margin-bottom: 4px; display: block;">Password</label>
+            <input type="password" id="sync-password" class="input input-sm" placeholder="••••••••" />
+          </div>
+          <div id="sync-error" style="color: var(--color-danger); font-size: 11px; display: none; margin-top: 2px;"></div>
+          <div style="display: flex; gap: 6px; margin-top: 6px;">
+            <button class="btn btn-secondary btn-sm w-full" id="btn-sync-signin">Sign In</button>
+            <button class="btn btn-ghost btn-sm w-full" id="btn-sync-signup" style="border: 1px solid var(--color-border)">Register</button>
+          </div>
+        </div>
+
+        <!-- Logged In View -->
+        <div id="sync-logged-in" class="hidden" style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 2px;">
+            <span class="text-muted text-sm" id="sync-user-email" style="text-overflow: ellipsis; overflow: hidden; white-space: nowrap; max-width: 140px; font-size: 12px;">user@email.com</span>
+            <button class="btn btn-ghost btn-sm" id="btn-sync-signout" style="border: 1px solid var(--color-border); padding: 3px 8px; font-size: 11px;">Sign Out</button>
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 4px;">
+            <button class="btn btn-secondary btn-sm w-full" id="btn-sync-now">Sync Now</button>
+          </div>
+        </div>
       </div>
     </div>
 
