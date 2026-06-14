@@ -63,6 +63,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   // Drag state
   let dragCreate = null; // { startHour, endHour, ghost }
   let dragResize = null; // { block, el, currentEnd }
+  let dragMove   = null; // { block, el, startY, blockStart, duration, hasMoved }
 
   // ── Build board skeleton ────────────────────────────────────────────────────
   containerEl.innerHTML = '';
@@ -158,29 +159,53 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       color: ${s.txt};
       border-radius: 6px;
       overflow: hidden;
-      cursor: pointer;
-      padding: 3px 7px;
+      cursor: default;
+      padding: 3px 7px 3px 18px;
       user-select: none;
       z-index: 2;
       box-sizing: border-box;
       transition: opacity 150ms;
     `;
     el.innerHTML = `
-      <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;">${esc(b.title || 'Untitled')}</div>
-      <div style="font-size:10px;opacity:0.75;margin-top:1px;">${formatHour(b.start)} – ${formatHour(b.end)}</div>
+      <div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>
+      <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;">${esc(b.title || 'Untitled')}</div>
+      <div style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;">${formatHour(b.start)} – ${formatHour(b.end)}</div>
       <div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>
     `;
 
     el.addEventListener('mouseenter', () => { el.style.opacity = '0.88'; });
     el.addEventListener('mouseleave', () => { el.style.opacity = '1'; });
-
-    // Click → edit modal (not if clicked on resize handle)
+ 
+    // Click → edit modal
     el.addEventListener('click', (e) => {
-      if (e.target.dataset.resizeHandle !== undefined) return;
+      if (e.target.dataset.resizeHandle !== undefined || e.target.closest('[data-drag-handle]')) return;
       e.stopPropagation();
       openBlockModal(b, false);
     });
 
+    // Mouse drag to move block - ONLY on drag handle
+    el.querySelector('[data-drag-handle]').addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      
+      const startY = e.clientY;
+      const blockStart = b.start;
+      const duration = b.end - b.start;
+      
+      dragMove = {
+        block: b,
+        el,
+        startY,
+        blockStart,
+        duration,
+        hasMoved: true
+      };
+      document.body.style.userSelect = 'none';
+      const handle = el.querySelector('[data-drag-handle]');
+      if (handle) handle.style.cursor = 'grabbing';
+    });
+ 
     // Resize handle mousedown
     el.querySelector('[data-resize-handle]').addEventListener('mousedown', (e) => {
       e.stopPropagation();
@@ -188,7 +213,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       document.body.style.userSelect = 'none';
       dragResize = { block: b, el, currentEnd: b.end };
     });
-
+ 
     return el;
   }
 
@@ -204,6 +229,51 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     e.preventDefault();
     const startHour = snapHour(clampH(pxToHour(getGridY(e))));
     dragCreate = { startHour, endHour: startHour + 0.5, ghost: null };
+  });
+
+  // ── Drag & Drop tasks onto grid ─────────────────────────────────────────────
+  gridEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+
+  gridEl.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    try {
+      const dataStr = e.dataTransfer.getData('text/plain');
+      if (!dataStr) return;
+      const taskData = JSON.parse(dataStr);
+      if (!taskData || !taskData.title) return;
+
+      const startHour = snapHour(clampH(pxToHour(getGridY(e))));
+      
+      // Snapping to estimate or defaulting to 1 hour
+      const duration = taskData.timeEstimate ? Math.max(0.5, snapHour(taskData.timeEstimate / 60)) : 1.0;
+      const endHour = Math.min(BOARD_END, startHour + duration);
+
+      // Map task category to timeboard categories
+      let blockCat = getSelectedCat();
+      // If task has a category, match or map it
+      if (taskData.category) {
+        // Find if taskData.category is an exact match or close match to timeline categories
+        const matched = CATEGORIES.find(c => c.toLowerCase() === taskData.category.toLowerCase());
+        if (matched) blockCat = matched;
+      }
+
+      const newBlock = {
+        id:    generateId(),
+        title: taskData.title,
+        cat:   blockCat,
+        start: startHour,
+        end:   endHour,
+      };
+
+      await addBlock(date, newBlock);
+      registerAlarm(newBlock, date);
+      await loadBlocks();
+    } catch (err) {
+      console.error('[Timeboard Drop] failed:', err);
+    }
   });
 
   // ── Global mousemove / mouseup ──────────────────────────────────────────────
@@ -236,6 +306,25 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       dragResize.currentEnd = newEnd;
       dragResize.el.style.height = Math.max(24, hourToPx(newEnd) - hourToPx(dragResize.block.start)) + 'px';
     }
+
+    if (dragMove) {
+      const deltaY = e.clientY - dragMove.startY;
+      const deltaHours = deltaY / PX_PER_HOUR;
+      let newStart = snapHour(clampH(dragMove.blockStart + deltaHours));
+      newStart = Math.max(BOARD_START, Math.min(BOARD_END - dragMove.duration, newStart));
+      const newEnd = newStart + dragMove.duration;
+      
+      dragMove.el.style.top = hourToPx(newStart) + 'px';
+      
+      // Update text representation of time inside the element
+      const timeLabel = dragMove.el.querySelector('div:nth-child(3)'); // Since 1st child is drag-handle, 2nd is title, 3rd is time
+      if (timeLabel) {
+        timeLabel.textContent = `${formatHour(newStart)} – ${formatHour(newEnd)}`;
+      }
+      
+      dragMove.currentStart = newStart;
+      dragMove.currentEnd = newEnd;
+    }
   }
 
   async function onMouseUp() {
@@ -267,6 +356,21 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
         cancelAlarm(block.id);
         registerAlarm({ ...block, end: currentEnd }, date);
         await loadBlocks();
+      }
+      return;
+    }
+
+    if (dragMove) {
+      const { block, currentStart, currentEnd } = dragMove;
+      dragMove = null;
+
+      if (currentStart !== undefined && currentEnd !== undefined) {
+        if (currentStart !== block.start || currentEnd !== block.end) {
+          await updateBlock(date, block.id, { start: currentStart, end: currentEnd });
+          cancelAlarm(block.id);
+          registerAlarm({ ...block, start: currentStart, end: currentEnd }, date);
+          await loadBlocks();
+        }
       }
     }
   }

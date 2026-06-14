@@ -73,6 +73,7 @@ let currentMonth     = new Date().getMonth(); // 0-indexed
 let activeCat        = 'Deep Work';
 let selectedPriority = 1;
 let activeTab        = 'day';
+let collapsedCategories = [];
 
 let timeboardInstance = null;
 
@@ -273,29 +274,49 @@ async function renderPriorityList() {
 
     renderedCount += catTasks.length;
     const pendingCount = catTasks.filter(t => !t.done).length;
+    const isCollapsed = collapsedCategories.includes(cat);
 
     html += `
       <div class="category-group" data-category="${escHtml(cat)}">
-        <div class="category-group-header">
-          <span class="category-group-title">${escHtml(cat)}</span>
+        <div class="category-group-header" data-cat="${escHtml(cat)}" style="cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="category-group-chevron" style="display: inline-flex; align-items: center; transition: transform 0.2s; transform: ${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'};">
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </span>
+            <span class="category-group-title">${escHtml(cat)}</span>
+          </div>
           <span class="category-group-badge ${pendingCount > 0 ? 'active' : ''}">${pendingCount}</span>
         </div>
-        <div class="category-group-list">
+        <div class="category-group-list" style="display: ${isCollapsed ? 'none' : 'block'};">
           ${catTasks.map((t) => `
-            <div class="priority-item" data-id="${t.id}">
-              <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
-              <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
-              <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
-              ${t.timeEstimate ? `<span class="priority-item-est">${t.timeEstimate}m</span>` : ''}
-              <div class="priority-item-delete" data-id="${t.id}" title="Delete">
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
-                     fill="none" stroke="currentColor" stroke-width="2.5"
-                     stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                  <path d="M10 11v6"/><path d="M14 11v6"/>
-                </svg>
+            <div class="priority-item-container" style="border-bottom: 1px solid var(--color-border); padding: 7px 0; display: flex; flex-direction: column;">
+              <div class="priority-item" data-id="${t.id}" draggable="true" style="border-bottom: none; padding: 0; cursor: grab;">
+                <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
+                <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
+                <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
+                ${t.timeEstimate ? `<span class="priority-item-est">${t.timeEstimate}m</span>` : ''}
+                <div class="priority-item-delete" data-id="${t.id}" title="Delete">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2.5"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6"/><path d="M14 11v6"/>
+                  </svg>
+                </div>
               </div>
+              ${t.subtasks && t.subtasks.length > 0 ? `
+                <div class="subtasks-list" style="margin-left: 28px; margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
+                  ${t.subtasks.map(sub => `
+                    <div class="subtask-item" style="display: flex; align-items: center; gap: 6px; padding: 1px 0;">
+                      <input type="checkbox" class="subtask-item-check" data-task-id="${t.id}" data-sub-id="${sub.id}" ${sub.done ? 'checked' : ''} style="width: 12px; height: 12px; accent-color: var(--color-accent); cursor: pointer;" />
+                      <span class="subtask-title-text${sub.done ? ' done-text' : ''}" style="font-size: 12px; color: var(--color-text);">${escHtml(sub.title)}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : ''}
             </div>
           `).join('')}
         </div>
@@ -310,11 +331,43 @@ async function renderPriorityList() {
 
   priorityList.innerHTML = html;
 
+  // Collapse toggle
+  priorityList.querySelectorAll('.category-group-header').forEach((hdr) => {
+    hdr.addEventListener('click', async () => {
+      const cat = hdr.dataset.cat;
+      if (collapsedCategories.includes(cat)) {
+        collapsedCategories = collapsedCategories.filter(c => c !== cat);
+      } else {
+        collapsedCategories.push(cat);
+      }
+      await set('collapsed_categories', collapsedCategories);
+      await renderPriorityList();
+    });
+  });
+
   // Checkbox toggle
   priorityList.querySelectorAll('.priority-item-check').forEach((cb) => {
     cb.addEventListener('change', async () => {
       await updateTask(currentDate, cb.dataset.id, { done: cb.checked });
       await renderPriorityList();
+    });
+  });
+
+  // Subtask checkbox toggles
+  priorityList.querySelectorAll('.subtask-item-check').forEach((cb) => {
+    cb.addEventListener('change', async () => {
+      const taskId = cb.dataset.taskId;
+      const subId = cb.dataset.subId;
+      const tasks = await getTasks(currentDate);
+      const t = tasks.find(x => x.id === taskId);
+      if (t && t.subtasks) {
+        const sub = t.subtasks.find(s => s.id === subId);
+        if (sub) {
+          sub.done = cb.checked;
+          await updateTask(currentDate, taskId, { subtasks: t.subtasks });
+          await renderPriorityList();
+        }
+      }
     });
   });
 
@@ -332,6 +385,23 @@ async function renderPriorityList() {
     btn.addEventListener('click', async () => {
       await deleteTask(currentDate, btn.dataset.id);
       await renderPriorityList();
+    });
+  });
+
+  // Dragstart binding
+  priorityList.querySelectorAll('.priority-item').forEach((item) => {
+    item.addEventListener('dragstart', (e) => {
+      const taskId = item.dataset.id;
+      const task = sorted.find(t => t.id === taskId);
+      if (task) {
+        e.dataTransfer.setData('text/plain', JSON.stringify({
+          id: task.id,
+          title: task.title,
+          category: task.category,
+          timeEstimate: task.timeEstimate
+        }));
+        e.dataTransfer.effectAllowed = 'copyMove';
+      }
     });
   });
 }
@@ -369,19 +439,89 @@ const taskPriorityInput= document.getElementById('task-priority-input');
 const taskCategoryInput= document.getElementById('task-category-input');
 const taskEstimateInput= document.getElementById('task-estimate-input');
 
+// Subtasks modal selectors
+const taskSubtaskInput = document.getElementById('task-subtask-input');
+const btnAddSubtask    = document.getElementById('btn-add-subtask');
+const modalSubtasksList= document.getElementById('modal-subtasks-list');
+const subtaskProgress  = document.getElementById('subtask-progress');
+
 let editingTask = null;
+let editingSubtasks = [];
 
 function openTaskModal(task = null) {
   editingTask = task;
+  editingSubtasks = task?.subtasks ? JSON.parse(JSON.stringify(task.subtasks)) : [];
   taskModalTitle.textContent = task ? 'Edit Task' : 'Add Task';
   taskTitleInput.value    = task?.title       ?? '';
   taskPriorityInput.value = String(task?.priority ?? 1);
   taskCategoryInput.value = task?.category || 'Personal';
   taskEstimateInput.value = task?.timeEstimate ?? '';
+  taskSubtaskInput.value = '';
+  
   btnTaskDelete.classList.toggle('hidden', !task);
   taskModalOverlay.classList.remove('hidden');
   taskTitleInput.focus();
+  renderModalSubtasks();
 }
+
+function renderModalSubtasks() {
+  const total = editingSubtasks.length;
+  const done = editingSubtasks.filter(s => s.done).length;
+  subtaskProgress.textContent = `${done}/${total}`;
+
+  modalSubtasksList.innerHTML = editingSubtasks.map((sub, idx) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 6px; background: var(--color-bg); border-radius: 4px; font-size: 12px; gap: 6px;">
+      <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+        <input type="checkbox" class="modal-subtask-check" data-idx="${idx}" ${sub.done ? 'checked' : ''} style="width: 13px; height: 13px; cursor: pointer; accent-color: var(--color-accent);" />
+        <span class="${sub.done ? 'done-text' : ''}" style="color: var(--color-text); word-break: break-all;">${escHtml(sub.title)}</span>
+      </div>
+      <button type="button" class="btn btn-ghost btn-xs delete-subtask-btn" data-idx="${idx}" style="color: var(--color-danger); padding: 2px; height: auto;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  `).join('');
+
+  // Bind checkbox change
+  modalSubtasksList.querySelectorAll('.modal-subtask-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const idx = parseInt(cb.dataset.idx, 10);
+      editingSubtasks[idx].done = cb.checked;
+      renderModalSubtasks();
+    });
+  });
+
+  // Bind delete button click
+  modalSubtasksList.querySelectorAll('.delete-subtask-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      editingSubtasks.splice(idx, 1);
+      renderModalSubtasks();
+    });
+  });
+}
+
+function addSubtaskFromInput() {
+  const title = taskSubtaskInput.value.trim();
+  if (!title) return;
+  editingSubtasks.push({
+    id: generateId(),
+    title,
+    done: false
+  });
+  taskSubtaskInput.value = '';
+  renderModalSubtasks();
+  taskSubtaskInput.focus();
+}
+
+btnAddSubtask.addEventListener('click', addSubtaskFromInput);
+taskSubtaskInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addSubtaskFromInput();
+  }
+});
 
 function closeTaskModal() {
   taskModalOverlay.classList.add('hidden');
@@ -394,12 +534,13 @@ async function saveTask() {
   const priority    = parseInt(taskPriorityInput.value, 10) || 1;
   const category    = taskCategoryInput.value;
   const timeEstimate= parseInt(taskEstimateInput.value, 10) || null;
+  const subtasks    = editingSubtasks;
 
   if (editingTask) {
-    await updateTask(currentDate, editingTask.id, { title, priority, timeEstimate, category });
+    await updateTask(currentDate, editingTask.id, { title, priority, timeEstimate, category, subtasks });
   } else {
     await addTask(currentDate, {
-      id: generateId(), title, done: false, priority, timeEstimate, category,
+      id: generateId(), title, done: false, priority, timeEstimate, category, subtasks,
     });
   }
   closeTaskModal();
@@ -926,6 +1067,7 @@ async function renderYearTab() {
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
+  collapsedCategories = (await get('collapsed_categories')) || [];
   renderDayDate();
   mountDayBoard();
   await populateCategoryDropdowns();
