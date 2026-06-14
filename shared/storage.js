@@ -890,3 +890,117 @@ export async function pullLatestFromCloud() {
   }
 }
 
+// ─── Custom Categories helpers ─────────────────────────────────────────────────
+
+const DEFAULT_CATEGORIES = [
+  "Personal",
+  "Academic Work",
+  "Home Chores",
+  "Company Work",
+  "My Own Projects",
+  "Workout/Gym",
+  "Other"
+];
+
+/**
+ * Get all task categories (defaults + custom).
+ * @returns {Promise<Array<string>>}
+ */
+export async function getCustomCategories() {
+  const categories = await get('task_categories');
+  if (!categories || !Array.isArray(categories) || categories.length === 0) {
+    await saveCustomCategories(DEFAULT_CATEGORIES);
+    return [...DEFAULT_CATEGORIES];
+  }
+  return categories;
+}
+
+/**
+ * Save custom categories list.
+ * @param {Array<string>} categories
+ * @returns {Promise<void>}
+ */
+export async function saveCustomCategories(categories) {
+  await set('task_categories', categories);
+}
+
+/**
+ * Add a new custom category.
+ * @param {string} category
+ * @returns {Promise<boolean>} True if added, false if already exists.
+ */
+export async function addCustomCategory(category) {
+  const cleanCategory = category.trim();
+  if (!cleanCategory) return false;
+  const categories = await getCustomCategories();
+  if (categories.some(c => c.toLowerCase() === cleanCategory.toLowerCase())) {
+    return false;
+  }
+  categories.push(cleanCategory);
+  await saveCustomCategories(categories);
+  return true;
+}
+
+/**
+ * Delete a category by name.
+ * @param {string} category
+ * @returns {Promise<void>}
+ */
+export async function deleteCustomCategory(category) {
+  const categories = await getCustomCategories();
+  const filtered = categories.filter(c => c !== category);
+  await saveCustomCategories(filtered);
+}
+
+/**
+ * Rename a category across storage and all tasks.
+ * @param {string} oldName
+ * @param {string} newName
+ * @returns {Promise<boolean>}
+ */
+export async function renameCustomCategory(oldName, newName) {
+  const cleanNew = newName.trim();
+  if (!cleanNew || oldName === cleanNew) return false;
+  
+  const categories = await getCustomCategories();
+  
+  // Check if target name already exists
+  if (categories.some(c => c.toLowerCase() === cleanNew.toLowerCase())) {
+    return false;
+  }
+
+  const index = categories.indexOf(oldName);
+  if (index !== -1) {
+    categories[index] = cleanNew;
+    await saveCustomCategories(categories);
+  }
+  
+  // Scan all storage keys and update tasks matching oldName
+  try {
+    const allStorage = await chrome.storage.local.get(null);
+    for (const key of Object.keys(allStorage)) {
+      if (key.startsWith('tasks_')) {
+        const tasks = allStorage[key];
+        if (Array.isArray(tasks)) {
+          let changed = false;
+          const updatedTasks = tasks.map(t => {
+            if (t.category === oldName) {
+              changed = true;
+              return { ...t, category: cleanNew };
+            }
+            return t;
+          });
+          if (changed) {
+            await chrome.storage.local.set({ [key]: updatedTasks });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Storage] Error renaming category in tasks:', err);
+  }
+  return true;
+}
+
+
+

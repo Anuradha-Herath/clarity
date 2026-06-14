@@ -88,7 +88,7 @@
 
           <!-- Top 3 Priorities -->
           <div class="card mb-4">
-            <div class="card-header">
+            <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
               <div class="card-title">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
                      fill="none" stroke="currentColor" stroke-width="2.5"
@@ -96,9 +96,20 @@
                   <polyline points="9 11 12 14 22 4"/>
                   <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
                 </svg>
-                Top 3 Priorities
+                Tasks
               </div>
-              <span class="text-xs text-muted" id="priority-task-count"></span>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-ghost btn-xs" id="btn-manage-categories" style="font-size: 11px; padding: 2px 6px;">Manage Cats</button>
+                <span class="text-xs text-muted" id="priority-task-count"></span>
+              </div>
+            </div>
+
+            <!-- Category Filter Row -->
+            <div class="priority-filter-row" style="padding: 8px 12px; border-bottom: 1px solid var(--color-border); display: flex; gap: 8px; align-items: center; background: var(--color-bg);">
+              <span class="text-xs text-muted font-semibold" style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;">Filter:</span>
+              <select id="priority-category-filter" class="select select-sm flex-1" style="height: 28px; font-size: 12px; padding: 2px 8px;">
+                <option value="all">All Categories</option>
+              </select>
             </div>
 
             <div id="priority-list" class="priority-list">
@@ -106,15 +117,22 @@
             </div>
 
             <!-- Quick-add row -->
-            <div class="priority-add-row">
-              <div class="priority-p-select">
-                <div class="priority-dot-btn active" data-p="1" title="High priority"></div>
-                <div class="priority-dot-btn" data-p="2" title="Medium priority"></div>
-                <div class="priority-dot-btn" data-p="3" title="Low priority"></div>
+            <div class="priority-add-row" style="flex-direction: column; align-items: stretch; gap: 6px; padding: 12px; border-top: 1px solid var(--color-border);">
+              <div class="flex items-center justify-between gap-2">
+                <div class="priority-p-select">
+                  <div class="priority-dot-btn active" data-p="1" title="High priority"></div>
+                  <div class="priority-dot-btn" data-p="2" title="Medium priority"></div>
+                  <div class="priority-dot-btn" data-p="3" title="Low priority"></div>
+                </div>
+                <select id="quick-add-category-input" class="select select-sm" style="width: 140px; height: 24px; font-size: 11px; padding: 0 4px;">
+                  <!-- Dynamically populated -->
+                </select>
               </div>
-              <input type="text" id="priority-input" class="input input-sm flex-1"
-                     placeholder="Add a task…" maxlength="200" />
-              <button class="btn btn-primary btn-sm" id="btn-add-priority">Add</button>
+              <div class="flex gap-2">
+                <input type="text" id="priority-input" class="input input-sm flex-1"
+                       placeholder="Add a task…" maxlength="200" />
+                <button class="btn btn-primary btn-sm" id="btn-add-priority">Add</button>
+              </div>
             </div>
           </div>
 
@@ -252,6 +270,12 @@
           <label class="label" for="task-title-input">Title</label>
           <input type="text" id="task-title-input" class="input" placeholder="Task title" maxlength="200" />
         </div>
+        <div class="form-group">
+          <label class="label" for="task-category-input">Category</label>
+          <select id="task-category-input" class="select">
+            <!-- Dynamically populated -->
+          </select>
+        </div>
         <div class="form-row">
           <div class="form-group">
             <label class="label" for="task-priority-input">Priority</label>
@@ -272,6 +296,36 @@
         <div class="flex gap-2">
           <button class="btn btn-secondary" id="btn-task-cancel">Cancel</button>
           <button class="btn btn-primary" id="btn-task-save">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Categories management modal -->
+  <div class="modal-overlay hidden" id="categories-modal-overlay">
+    <div class="modal" style="max-width:340px">
+      <div class="modal-header">
+        <div class="modal-title">Manage Categories</div>
+        <button class="btn btn-ghost btn-icon" id="categories-modal-close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="label" for="new-category-input">New Category</label>
+          <div class="flex gap-2">
+            <input type="text" id="new-category-input" class="input flex-1" placeholder="Category name (e.g. Reading)" maxlength="30" />
+            <button class="btn btn-primary btn-sm" id="btn-add-custom-category">Add</button>
+          </div>
+        </div>
+        <label class="label">Categories List</label>
+        <div class="categories-list" id="manage-categories-list" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: var(--border-radius); background: var(--color-bg); padding: 4px;">
+          <!-- Populate with existing categories and delete options -->
         </div>
       </div>
     </div>

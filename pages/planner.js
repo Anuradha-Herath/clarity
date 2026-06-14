@@ -11,6 +11,7 @@ import {
   getYearlyThemes, setMonthTheme,
   generateId, todayKey, dateKey,
   snapHour,
+  getCustomCategories, addCustomCategory, deleteCustomCategory, renameCustomCategory,
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
@@ -91,7 +92,7 @@ tabBtns.forEach((btn) => {
   });
 });
 
-function switchTab(tab) {
+async function switchTab(tab) {
   activeTab = tab;
   tabBtns.forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   Object.entries(tabPanels).forEach(([key, el]) => {
@@ -102,8 +103,9 @@ function switchTab(tab) {
   if (tab === 'day') {
     mountDayBoard();
     renderDayDate();
-    renderPriorityList();
-    loadNotes();
+    await populateCategoryDropdowns();
+    await renderPriorityList();
+    await loadNotes();
   } else if (tab === 'week') {
     renderWeekTab();
   } else if (tab === 'month') {
@@ -182,21 +184,52 @@ function mountDayBoard() {
   });
 }
 
-// ── Priority list ───────────────────────────────────────────────────────────
+// ── Priority list & Categories ──────────────────────────────────────────────
 
 const priorityList      = document.getElementById('priority-list');
 const priorityTaskCount = document.getElementById('priority-task-count');
 const priorityInput     = document.getElementById('priority-input');
 const btnAddPriority    = document.getElementById('btn-add-priority');
+const categoryFilter    = document.getElementById('priority-category-filter');
+const quickAddCatInput  = document.getElementById('quick-add-category-input');
+
+// Category filter state
+let activeCategoryFilter = 'all';
 
 // Priority dot selector
-let editingTaskId = null;
 document.querySelectorAll('.priority-dot-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.priority-dot-btn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     selectedPriority = parseInt(btn.dataset.p, 10);
   });
+});
+
+// Populate Category selects/dropdowns
+async function populateCategoryDropdowns() {
+  const categories = await getCustomCategories();
+  
+  // Populate filter dropdown
+  const currentFilterVal = categoryFilter.value || 'all';
+  categoryFilter.innerHTML = `<option value="all">All Categories</option>` + 
+    categories.map(cat => `<option value="${escHtml(cat)}">${escHtml(cat)}</option>`).join('');
+  categoryFilter.value = currentFilterVal;
+
+  // Populate quick add dropdown
+  const currentQuickAddVal = quickAddCatInput.value || 'Personal';
+  quickAddCatInput.innerHTML = categories.map(cat => `<option value="${escHtml(cat)}">${escHtml(cat)}</option>`).join('');
+  quickAddCatInput.value = categories.includes(currentQuickAddVal) ? currentQuickAddVal : categories[0] || 'Personal';
+
+  // Populate task modal dropdown
+  const taskCategoryInput = document.getElementById('task-category-input');
+  const currentModalVal = taskCategoryInput.value || 'Personal';
+  taskCategoryInput.innerHTML = categories.map(cat => `<option value="${escHtml(cat)}">${escHtml(cat)}</option>`).join('');
+  taskCategoryInput.value = categories.includes(currentModalVal) ? currentModalVal : categories[0] || 'Personal';
+}
+
+categoryFilter.addEventListener('change', () => {
+  activeCategoryFilter = categoryFilter.value;
+  renderPriorityList();
 });
 
 async function renderPriorityList() {
@@ -210,28 +243,72 @@ async function renderPriorityList() {
   const pCount = tasks.filter((t) => !t.done).length;
   priorityTaskCount.textContent = `${pCount} pending`;
 
-  if (sorted.length === 0) {
-    priorityList.innerHTML = `<div style="font-size:13px;color:var(--color-text-muted);padding:8px 0;font-style:italic;">No tasks yet — add one below</div>`;
+  const categories = await getCustomCategories();
+  
+  // Group tasks by category
+  const grouped = {};
+  categories.forEach(cat => {
+    grouped[cat] = [];
+  });
+  // Fallbacks
+  grouped['Personal'] = grouped['Personal'] || [];
+  grouped['Other'] = grouped['Other'] || [];
+
+  for (const t of sorted) {
+    const cat = t.category || 'Personal';
+    if (!grouped[cat]) {
+      grouped[cat] = [];
+    }
+    grouped[cat].push(t);
+  }
+
+  // Generate html sections for categories
+  let html = '';
+  let renderedCount = 0;
+
+  for (const cat of Object.keys(grouped)) {
+    const catTasks = grouped[cat];
+    if (catTasks.length === 0) continue;
+    if (activeCategoryFilter !== 'all' && activeCategoryFilter !== cat) continue;
+
+    renderedCount += catTasks.length;
+    const pendingCount = catTasks.filter(t => !t.done).length;
+
+    html += `
+      <div class="category-group" data-category="${escHtml(cat)}">
+        <div class="category-group-header">
+          <span class="category-group-title">${escHtml(cat)}</span>
+          <span class="category-group-badge ${pendingCount > 0 ? 'active' : ''}">${pendingCount}</span>
+        </div>
+        <div class="category-group-list">
+          ${catTasks.map((t) => `
+            <div class="priority-item" data-id="${t.id}">
+              <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
+              <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
+              <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
+              ${t.timeEstimate ? `<span class="priority-item-est">${t.timeEstimate}m</span>` : ''}
+              <div class="priority-item-delete" data-id="${t.id}" title="Delete">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2.5"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6"/><path d="M14 11v6"/>
+                </svg>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  if (renderedCount === 0) {
+    priorityList.innerHTML = `<div style="font-size:13px;color:var(--color-text-muted);padding:12px;text-align:center;font-style:italic;">No tasks today — add one below</div>`;
     return;
   }
 
-  priorityList.innerHTML = sorted.map((t) => `
-    <div class="priority-item" data-id="${t.id}">
-      <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
-      <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
-      <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
-      ${t.timeEstimate ? `<span class="priority-item-est">${t.timeEstimate}m</span>` : ''}
-      <div class="priority-item-delete" data-id="${t.id}" title="Delete">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="2.5"
-             stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="3 6 5 6 21 6"/>
-          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-          <path d="M10 11v6"/><path d="M14 11v6"/>
-        </svg>
-      </div>
-    </div>
-  `).join('');
+  priorityList.innerHTML = html;
 
   // Checkbox toggle
   priorityList.querySelectorAll('.priority-item-check').forEach((cb) => {
@@ -262,12 +339,14 @@ async function renderPriorityList() {
 async function addPriorityTask() {
   const title = priorityInput.value.trim();
   if (!title) return;
+  const category = quickAddCatInput.value;
   await addTask(currentDate, {
     id: generateId(),
     title,
     done: false,
     priority: selectedPriority,
     timeEstimate: null,
+    category,
   });
   priorityInput.value = '';
   await renderPriorityList();
@@ -287,6 +366,7 @@ const btnTaskSave      = document.getElementById('btn-task-save');
 const btnTaskDelete    = document.getElementById('btn-task-delete');
 const taskTitleInput   = document.getElementById('task-title-input');
 const taskPriorityInput= document.getElementById('task-priority-input');
+const taskCategoryInput= document.getElementById('task-category-input');
 const taskEstimateInput= document.getElementById('task-estimate-input');
 
 let editingTask = null;
@@ -296,6 +376,7 @@ function openTaskModal(task = null) {
   taskModalTitle.textContent = task ? 'Edit Task' : 'Add Task';
   taskTitleInput.value    = task?.title       ?? '';
   taskPriorityInput.value = String(task?.priority ?? 1);
+  taskCategoryInput.value = task?.category || 'Personal';
   taskEstimateInput.value = task?.timeEstimate ?? '';
   btnTaskDelete.classList.toggle('hidden', !task);
   taskModalOverlay.classList.remove('hidden');
@@ -311,13 +392,14 @@ async function saveTask() {
   const title = taskTitleInput.value.trim();
   if (!title) { taskTitleInput.focus(); return; }
   const priority    = parseInt(taskPriorityInput.value, 10) || 1;
+  const category    = taskCategoryInput.value;
   const timeEstimate= parseInt(taskEstimateInput.value, 10) || null;
 
   if (editingTask) {
-    await updateTask(currentDate, editingTask.id, { title, priority, timeEstimate });
+    await updateTask(currentDate, editingTask.id, { title, priority, timeEstimate, category });
   } else {
     await addTask(currentDate, {
-      id: generateId(), title, done: false, priority, timeEstimate,
+      id: generateId(), title, done: false, priority, timeEstimate, category,
     });
   }
   closeTaskModal();
@@ -339,6 +421,148 @@ taskTitleInput.addEventListener('keydown', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !taskModalOverlay.classList.contains('hidden')) closeTaskModal();
+});
+
+// ── Categories management modal ─────────────────────────────────────────────
+const btnManageCategories = document.getElementById('btn-manage-categories');
+const categoriesModalOverlay = document.getElementById('categories-modal-overlay');
+const categoriesModalClose = document.getElementById('categories-modal-close');
+const btnAddCustomCategory = document.getElementById('btn-add-custom-category');
+const newCategoryInput = document.getElementById('new-category-input');
+const manageCategoriesList = document.getElementById('manage-categories-list');
+
+async function renderManageCategoriesList() {
+  const categories = await getCustomCategories();
+  
+  manageCategoriesList.innerHTML = categories.map(cat => {
+    return `
+      <div class="manage-cat-item" data-cat="${escHtml(cat)}" style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid var(--color-border); font-size: 13px; gap: 8px;">
+        <div class="cat-display-mode" style="display: flex; align-items: center; justify-content: space-between; flex: 1; width: 100%;">
+          <span class="cat-name-span" style="font-weight: 500;">${escHtml(cat)}</span>
+          <div style="display: flex; gap: 4px;">
+            <button class="btn btn-ghost btn-xs edit-cat-btn" data-cat="${escHtml(cat)}" style="color: var(--color-text-muted); padding: 2px; height: auto;" title="Rename">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
+            <button class="btn btn-ghost btn-xs delete-cat-btn" data-cat="${escHtml(cat)}" style="color: var(--color-danger); padding: 2px; height: auto;" title="Delete">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="cat-edit-mode hidden" style="display: flex; gap: 4px; flex: 1; width: 100%;">
+          <input type="text" class="input input-sm edit-cat-input" value="${escHtml(cat)}" style="height: 24px; font-size: 12px; flex: 1; padding: 2px 6px;" maxlength="30" />
+          <button class="btn btn-primary btn-xs save-cat-btn" data-cat="${escHtml(cat)}" style="padding: 2px 6px; font-size: 10px; height: 24px;">Save</button>
+          <button class="btn btn-secondary btn-xs cancel-cat-btn" style="padding: 2px 6px; font-size: 10px; height: 24px;">Esc</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Attach display mode / edit mode toggle
+  manageCategoriesList.querySelectorAll('.manage-cat-item').forEach(item => {
+    const displayMode = item.querySelector('.cat-display-mode');
+    const editMode = item.querySelector('.cat-edit-mode');
+    const editInput = item.querySelector('.edit-cat-input');
+    const editBtn = item.querySelector('.edit-cat-btn');
+    const cancelBtn = item.querySelector('.cancel-cat-btn');
+    const saveBtn = item.querySelector('.save-cat-btn');
+    const oldCatName = item.dataset.cat;
+
+    editBtn.addEventListener('click', () => {
+      displayMode.classList.add('hidden');
+      editMode.classList.remove('hidden');
+      editInput.focus();
+      editInput.select();
+    });
+
+    cancelBtn.addEventListener('click', () => {
+      editMode.classList.add('hidden');
+      displayMode.classList.remove('hidden');
+      editInput.value = oldCatName;
+    });
+
+    const triggerRename = async () => {
+      const newCatName = editInput.value.trim();
+      if (!newCatName || newCatName === oldCatName) {
+        cancelBtn.click();
+        return;
+      }
+      const success = await renameCustomCategory(oldCatName, newCatName);
+      if (success) {
+        await populateCategoryDropdowns();
+        await renderManageCategoriesList();
+        await renderPriorityList();
+      } else {
+        alert('Category name already exists or is invalid.');
+      }
+    };
+
+    saveBtn.addEventListener('click', triggerRename);
+    editInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        triggerRename();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelBtn.click();
+      }
+    });
+  });
+
+  // Attach delete events
+  manageCategoriesList.querySelectorAll('.delete-cat-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const catToDelete = btn.dataset.cat;
+      if (confirm(`Are you sure you want to delete the category "${catToDelete}"? (Tasks in this category will display under "Personal")`)) {
+        await deleteCustomCategory(catToDelete);
+        await populateCategoryDropdowns();
+        await renderManageCategoriesList();
+        await renderPriorityList();
+      }
+    });
+  });
+}
+
+btnManageCategories.addEventListener('click', () => {
+  renderManageCategoriesList();
+  categoriesModalOverlay.classList.remove('hidden');
+});
+
+categoriesModalClose.addEventListener('click', () => {
+  categoriesModalOverlay.classList.add('hidden');
+});
+
+categoriesModalOverlay.addEventListener('click', (e) => {
+  if (e.target === categoriesModalOverlay) {
+    categoriesModalOverlay.classList.add('hidden');
+  }
+});
+
+async function handleAddCategory() {
+  const catName = newCategoryInput.value.trim();
+  if (!catName) return;
+  const success = await addCustomCategory(catName);
+  if (success) {
+    newCategoryInput.value = '';
+    await populateCategoryDropdowns();
+    await renderManageCategoriesList();
+    await renderPriorityList();
+  } else {
+    alert('Category name already exists or is invalid.');
+  }
+}
+
+btnAddCustomCategory.addEventListener('click', handleAddCategory);
+newCategoryInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    handleAddCategory();
+  }
 });
 
 // ── Notes ───────────────────────────────────────────────────────────────────
@@ -704,6 +928,7 @@ async function renderYearTab() {
 async function init() {
   renderDayDate();
   mountDayBoard();
+  await populateCategoryDropdowns();
   await renderPriorityList();
   await loadNotes();
 }
