@@ -10,6 +10,7 @@ import {
   get, set, remove,
   getYearlyThemes,
   generateId, todayKey, dateKey,
+  getHabits,
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
@@ -94,6 +95,44 @@ const board = mountTimeboard(boardWrap, TODAY, {
 // ─── ══════════════════════════════════════════════════════
 //     TODAY'S TASKS
 // ══════════════════════════════════════════════════════════
+
+// ─── ══════════════════════════════════════════════════════
+//     HABITS TODAY WIDGET
+// ══════════════════════════════════════════════════════════
+const dashHabitsCard = document.getElementById('dash-habits-card');
+const dashHabitsCount = document.getElementById('dash-habits-count');
+const dashHabitsStreaks = document.getElementById('dash-habits-streaks');
+
+async function renderHabitsWidget() {
+  if (!dashHabitsCard) return;
+
+  const habits = await getHabits();
+  const allTasks = await getTasks(TODAY);
+  const habitTasks = allTasks.filter(t => t.habitId);
+
+  const total = habitTasks.length;
+  const done = habitTasks.filter(t => t.done).length;
+
+  dashHabitsCount.textContent = `${done} of ${total} habits done today`;
+
+  if (total === 0) {
+    dashHabitsStreaks.innerHTML = `<span class="text-xs text-muted">No habits scheduled for today.</span>`;
+    return;
+  }
+
+  dashHabitsStreaks.innerHTML = habitTasks.map(task => {
+    const habit = habits.find(h => h.id === task.habitId);
+    if (!habit) return '';
+    const streak = habit.streak?.current || 0;
+    return `
+      <span class="streak-badge" title="${habit.name}: ${streak} day streak" style="font-size: 13px; color: var(--color-warning); display: inline-flex; align-items: center; gap: 3px; padding: 2px 4px;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2c1.78 0 3.32.96 4.12 2.39C17 5.76 17 8 15 10c-2.4 2.4-1.78 6-1 7 .5.6 1 1 2 1s2.5-.5 3-1.5c1.4-2.8 1.4-6.2.2-9.2C19.78 6.55 20 5.4 20 4c0-1.1-.9-2-2-2-1.2 0-2.2.8-2.6 1.9C14.7 3.3 13.4 3 12 3s-2.7.3-3.4.9C8.2 2.8 7.2 2 6 2 4.9 2 4 2.9 4 4c0 1.4.22 2.55.8 3.3C3.6 10.3 3.6 13.7 5 16.5c.5 1 2 1.5 3 1.5s1.5-.4 2-1c.78-1 1.4-4.6-1-7C7 8 7 5.76 7.88 4.39 8.68 2.96 10.22 2 12 2z"></path></svg>
+        <span style="font-weight: 700;">${streak}</span>
+        <span style="font-size: 10px; color: var(--color-text-muted); font-weight: normal; margin-left: 2px;">${habit.name}</span>
+      </span>
+    `;
+  }).join('');
+}
 
 const dashTaskList  = document.getElementById('dash-task-list');
 const dashTaskInput = document.getElementById('dash-task-input');
@@ -345,17 +384,33 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes[todayTaskKey])  {
     renderTasks();
     renderWeekProgress();
+    renderHabitsWidget();
+  }
+  if (changes['habits']) {
+    renderHabitsWidget();
   }
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
+  // Sync habits for next 7 days on load
+  try {
+    await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
+  } catch (_) {}
+
   renderGreeting();
   await Promise.all([
     renderTasks(),
     renderInbox(),
     renderWeekProgress(),
+    renderHabitsWidget(),
   ]);
+
+  if (dashHabitsCard) {
+    dashHabitsCard.addEventListener('click', () => {
+      window.location.href = 'habits/habits.html';
+    });
+  }
 }
 
 init();

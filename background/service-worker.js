@@ -412,6 +412,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     case 'midnight_reregister':
       // Re-register daily alarms each midnight in case settings changed
       await registerDailyAlarms();
+      await syncHabitsForNext7DaysSW();
       break;
 
     case 'timer_complete':
@@ -513,9 +514,287 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse(PAGES);
       break;
 
+    case 'SYNC_HABITS':
+      syncHabitsForNext7DaysSW().then(() => sendResponse({ ok: true }));
+      return true; // async response
+
     default:
       console.warn('[SW] Unknown message type:', message.type);
   }
 });
 
 console.log('[SW] Clarity service worker loaded.');
+
+// ─── Habit Tracker service-worker sync ─────────────────────────────────────────
+
+function swParseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function swFormatLocalDate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function swGetMonthDates(year, monthIndex, count) {
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const selectedDays = [];
+  const c = Math.min(count, daysInMonth);
+  for (let i = 0; i < daysInMonth; i++) {
+    const val1 = Math.floor((i * c) / daysInMonth);
+    const val2 = Math.floor(((i - 1) * c) / daysInMonth);
+    if (i === 0 || val1 !== val2) {
+      selectedDays.push(i + 1);
+    }
+  }
+  return selectedDays;
+}
+
+const SW_WEEK_DISTRIBUTIONS = {
+  1: ["Wed"],
+  2: ["Tue", "Thu"],
+  3: ["Mon", "Wed", "Fri"],
+  4: ["Mon", "Wed", "Fri", "Sun"],
+  5: ["Mon", "Tue", "Thu", "Fri", "Sun"],
+  6: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+  7: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+};
+
+const SW_WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function swGenerateHabitInstances(habit, dateRange) {
+  if (habit.status !== 'active') return [];
+
+  const instances = [];
+  const startLocal = swParseLocalDate(habit.goal.startDate);
+  
+  let endLocal = null;
+  if (habit.goal.type !== 'ongoing' && habit.goal.durationDays) {
+    endLocal = new Date(startLocal);
+    endLocal.setDate(endLocal.getDate() + habit.goal.durationDays - 1);
+  }
+
+  for (const dateStr of dateRange) {
+    const curLocal = swParseLocalDate(dateStr);
+
+    if (curLocal < startLocal) continue;
+    if (endLocal && curLocal > endLocal) continue;
+
+    let isScheduled = false;
+    const recurrence = habit.recurrence || {};
+
+    switch (recurrence.type) {
+      case 'daily':
+        isScheduled = true;
+        break;
+
+      case 'specificDays':
+        if (recurrence.days && Array.isArray(recurrence.days)) {
+          const wd = SW_WEEKDAY_NAMES[curLocal.getDay()];
+          isScheduled = recurrence.days.includes(wd);
+        }
+        break;
+
+      case 'everyOtherDay': {
+        const msDiff = curLocal.getTime() - startLocal.getTime();
+        const daysDiff = Math.round(msDiff / (24 * 60 * 60 * 1000));
+        isScheduled = (daysDiff >= 0 && daysDiff % 2 === 0);
+        break;
+      }
+
+      case 'xPerWeek': {
+        const count = Math.min(7, Math.max(1, recurrence.countPerPeriod || 1));
+        const activeDays = SW_WEEK_DISTRIBUTIONS[count] || ["Wed"];
+        const curDayIndex = curLocal.getDay();
+        const adjustedIdx = curDayIndex === 0 ? 7 : curDayIndex;
+        const adjustedNames = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        const curDayName = adjustedNames[adjustedIdx];
+        isScheduled = activeDays.includes(curDayName);
+        break;
+      }
+
+      case 'xPerMonth': {
+        const year = curLocal.getFullYear();
+        const month = curLocal.getMonth();
+        const day = curLocal.getDate();
+        const count = recurrence.countPerPeriod || 1;
+        const scheduledDays = swGetMonthDates(year, month, count);
+        isScheduled = scheduledDays.includes(day);
+        break;
+      }
+    }
+
+    if (isScheduled && habit.timeSlots && Array.isArray(habit.timeSlots)) {
+      for (const slot of habit.timeSlots) {
+        const hasMultipleSlots = habit.timeSlots.length > 1;
+        const slotSuffix = hasMultipleSlots ? ` (${slot.label || slot.time})` : '';
+        instances.push({
+          date: dateStr,
+          time: slot.time,
+          title: `${habit.name}${slotSuffix}`,
+          habitId: habit.id,
+          slotLabel: slot.label || ''
+        });
+      }
+    }
+  }
+
+  return instances;
+}
+
+function swRecalculateHabitStreaks(habit, todayStr) {
+  const startDateStr = habit.goal.startDate;
+  if (todayStr < startDateStr) {
+    return { current: 0, longest: habit.streak?.longest || 0, lastCompletedDate: habit.streak?.lastCompletedDate || null };
+  }
+
+  const start = swParseLocalDate(startDateStr);
+  const end = swParseLocalDate(todayStr);
+  const dates = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    dates.push(swFormatLocalDate(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  const scheduledDates = new Set();
+  const instances = swGenerateHabitInstances(habit, dates);
+  for (const inst of instances) {
+    scheduledDates.add(inst.date);
+  }
+
+  const sortedScheduled = Array.from(scheduledDates).sort((a, b) => b.localeCompare(a));
+
+  let currentStreak = 0;
+  let lastCompletedDate = habit.streak?.lastCompletedDate || null;
+
+  for (const date of sortedScheduled) {
+    const dayCompletions = habit.completions?.[date] || {};
+    const slots = habit.timeSlots || [];
+    const isCompleted = slots.length > 0 && slots.every(s => dayCompletions[s.time] === true);
+
+    if (date === todayStr) {
+      if (isCompleted) {
+        currentStreak++;
+        if (!lastCompletedDate || date > lastCompletedDate) {
+          lastCompletedDate = date;
+        }
+      }
+    } else {
+      if (isCompleted) {
+        currentStreak++;
+        if (!lastCompletedDate || date > lastCompletedDate) {
+          lastCompletedDate = date;
+        }
+      } else {
+        break;
+      }
+    }
+  }
+
+  let longest = habit.streak?.longest || 0;
+  if (currentStreak > longest) {
+    longest = currentStreak;
+  }
+
+  return { current: currentStreak, longest, lastCompletedDate };
+}
+
+async function syncHabitsForNext7DaysSW() {
+  const todayStr = todayKey();
+  const next7Days = [];
+  for (let i = 0; i <= 7; i++) {
+    next7Days.push(dateKey(i));
+  }
+
+  const result = await chrome.storage.local.get('habits');
+  const habits = result.habits || [];
+  let habitsChanged = false;
+
+  // 1. Recalculate streaks and goals
+  for (let i = 0; i < habits.length; i++) {
+    const habit = habits[i];
+    if (habit.status === 'active') {
+      const updates = swRecalculateHabitStreaks(habit, todayStr);
+      habit.streak = { ...habit.streak, ...updates };
+
+      if (habit.goal && habit.goal.type !== 'ongoing' && habit.goal.durationDays) {
+        const startLocal = swParseLocalDate(habit.goal.startDate);
+        const todayLocal = swParseLocalDate(todayStr);
+        const msDiff = todayLocal.getTime() - startLocal.getTime();
+        const daysElapsed = Math.round(msDiff / (24 * 60 * 60 * 1000));
+        
+        if (daysElapsed >= habit.goal.durationDays) {
+          habit.status = 'completed';
+          habit.showCompletionCelebration = true;
+        }
+      }
+      habitsChanged = true;
+    }
+  }
+
+  if (habitsChanged) {
+    await chrome.storage.local.set({ habits });
+  }
+
+  const activeHabits = habits.filter(h => h.status === 'active');
+  if (activeHabits.length === 0) return;
+
+  // 2. Generate and write tasks/blocks
+  for (const habit of activeHabits) {
+    const instances = swGenerateHabitInstances(habit, next7Days);
+    for (const inst of instances) {
+      const tKey = `tasks_${inst.date}`;
+      const bKey = `blocks_${inst.date}`;
+
+      const data = await chrome.storage.local.get([tKey, bKey]);
+      const tasks = data[tKey] || [];
+      const blocks = data[bKey] || [];
+
+      let taskChanged = false;
+      const taskExists = tasks.some(t => t.habitId === inst.habitId && t.habitTime === inst.time);
+      if (!taskExists) {
+        tasks.push({
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+          title: inst.title,
+          done: false,
+          priority: 3,
+          timeEstimate: 15,
+          category: habit.category,
+          habitId: habit.id,
+          habitTime: inst.time
+        });
+        taskChanged = true;
+      }
+
+      let blockChanged = false;
+      const decStart = (() => {
+        const [h, m] = inst.time.split(':').map(Number);
+        return h + m / 60;
+      })();
+      const blockExists = blocks.some(b => b.habitId === inst.habitId && b.habitTime === inst.time);
+      if (!blockExists) {
+        blocks.push({
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+          title: inst.title,
+          cat: habit.category,
+          start: decStart,
+          end: decStart + 0.25,
+          habitId: habit.id,
+          habitTime: inst.time
+        });
+        blockChanged = true;
+      }
+
+      if (taskChanged) {
+        await chrome.storage.local.set({ [tKey]: tasks });
+      }
+      if (blockChanged) {
+        await chrome.storage.local.set({ [bKey]: blocks });
+      }
+    }
+  }
+}

@@ -58,6 +58,7 @@
         "pages/planner.html",
         "pages/vision.html",
         "pages/tracker.html",
+        "pages/habits/habits.html",
         "capture/capture.html",
         "shared/style.css"
       ],

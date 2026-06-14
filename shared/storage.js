@@ -34,6 +34,7 @@ const DEFAULTS = {
   yearly_themes: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, theme: '' })),
   time_logs: [],
   capture_inbox: [],
+  habits: [],
 };
 
 // ─── ID generator ──────────────────────────────────────────────────────────────
@@ -355,7 +356,12 @@ export async function addTask(date, task) {
  * @returns {Promise<void>}
  */
 export async function updateTask(date, id, patch) {
+  const tasks = (await get(`tasks_${date}`)) ?? [];
+  const task = tasks.find(t => t.id === id);
   await update(`tasks_${date}`, id, patch);
+  if (task && task.habitId && 'done' in patch) {
+    await handleHabitCompletionToggle(date, task.habitId, task.habitTime, patch.done);
+  }
 }
 
 /**
@@ -1039,6 +1045,173 @@ export async function renameCustomCategory(oldName, newName) {
     console.error('[Storage] Error renaming category in tasks:', err);
   }
   return true;
+}
+
+// ─── Habit Helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Get all habits.
+ * @returns {Promise<Array>}
+ */
+export async function getHabits() {
+  return (await get('habits')) ?? [];
+}
+
+/**
+ * Save all habits.
+ * @param {Array} habits
+ * @returns {Promise<void>}
+ */
+export async function saveHabits(habits) {
+  await set('habits', habits);
+}
+
+/**
+ * Handle checking/unchecking a habit-linked task.
+ */
+export async function handleHabitCompletionToggle(date, habitId, time, done) {
+  const habits = await getHabits();
+  const habitIndex = habits.findIndex(h => h.id === habitId);
+  if (habitIndex === -1) return;
+
+  const habit = habits[habitIndex];
+  if (!habit.completions) habit.completions = {};
+  if (!habit.completions[date]) habit.completions[date] = {};
+  habit.completions[date][time] = done;
+
+  // Recalculate streaks
+  const { recalculateHabitStreaks } = await import('./habitEngine.js');
+  const streakUpdates = recalculateHabitStreaks(habit, todayKey());
+  habit.streak = {
+    ...habit.streak,
+    ...streakUpdates
+  };
+
+  // If goal duration elapsed, check status
+  if (habit.goal && habit.goal.type !== 'ongoing' && habit.goal.durationDays) {
+    const [sy, sm, sd] = habit.goal.startDate.split('-').map(Number);
+    const startLocal = new Date(sy, sm - 1, sd);
+    const [ty, tm, td] = todayKey().split('-').map(Number);
+    const todayLocal = new Date(ty, tm - 1, td);
+    const msDiff = todayLocal.getTime() - startLocal.getTime();
+    const daysElapsed = Math.round(msDiff / (24 * 60 * 60 * 1000));
+    
+    if (daysElapsed >= habit.goal.durationDays) {
+      if (habit.status === 'active') {
+        habit.status = 'completed';
+        habit.showCompletionCelebration = true;
+      }
+    }
+  }
+
+  habits[habitIndex] = habit;
+  await saveHabits(habits);
+}
+
+/**
+ * Synchronize habits and generate tasks/blocks for a date range (inclusive).
+ */
+export async function syncHabitsForRange(startDate, endDate) {
+  const habits = await getHabits();
+  const activeHabits = habits.filter(h => h.status === 'active');
+  if (activeHabits.length === 0) return;
+
+  // Generate range of dates in local time
+  const dates = [];
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const cur = new Date(sy, sm - 1, sd);
+  const [ey, em, ed] = endDate.split('-').map(Number);
+  const end = new Date(ey, em - 1, ed);
+
+  while (cur <= end) {
+    const y = cur.getFullYear();
+    const m = String(cur.getMonth() + 1).padStart(2, '0');
+    const d = String(cur.getDate()).padStart(2, '0');
+    dates.push(`${y}-${m}-${d}`);
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  const { generateHabitInstances } = await import('./habitEngine.js');
+
+  for (const habit of activeHabits) {
+    const instances = generateHabitInstances(habit, dates);
+    for (const inst of instances) {
+      // 1. Sync tasks
+      const tasks = await getTasks(inst.date);
+      const taskExists = tasks.some(t => t.habitId === inst.habitId && t.habitTime === inst.time);
+      if (!taskExists) {
+        const newTask = {
+          id: generateId(),
+          title: inst.title,
+          done: false,
+          priority: 3,
+          timeEstimate: 15,
+          category: habit.category,
+          habitId: habit.id,
+          habitTime: inst.time
+        };
+        tasks.push(newTask);
+        await setTasks(inst.date, tasks);
+      }
+
+      // 2. Sync blocks
+      const blocks = await getBlocks(inst.date);
+      const decStart = timeToDec(inst.time);
+      const blockExists = blocks.some(b => b.habitId === inst.habitId && b.habitTime === inst.time);
+      if (!blockExists) {
+        const newBlock = {
+          id: generateId(),
+          title: inst.title,
+          cat: habit.category,
+          start: decStart,
+          end: decStart + 0.25, // default 15m
+          habitId: habit.id,
+          habitTime: inst.time
+        };
+        blocks.push(newBlock);
+        await setBlocks(inst.date, blocks);
+      }
+    }
+  }
+}
+
+/**
+ * Remove future generated habit tasks/blocks starting from a given date.
+ */
+export async function removeFutureHabitInstances(habitId, fromDate) {
+  try {
+    const allStorage = await chrome.storage.local.get(null);
+    for (const key of Object.keys(allStorage)) {
+      // Clean up tasks
+      if (key.startsWith('tasks_')) {
+        const datePart = key.slice('tasks_'.length);
+        if (datePart >= fromDate) {
+          const tasks = allStorage[key];
+          if (Array.isArray(tasks)) {
+            const filtered = tasks.filter(t => t.habitId !== habitId);
+            if (filtered.length !== tasks.length) {
+              await chrome.storage.local.set({ [key]: filtered });
+            }
+          }
+        }
+      }
+      // Clean up blocks
+      if (key.startsWith('blocks_')) {
+        const datePart = key.slice('blocks_'.length);
+        if (datePart >= fromDate) {
+          const blocks = allStorage[key];
+          if (Array.isArray(blocks)) {
+            const filtered = blocks.filter(b => b.habitId !== habitId);
+            if (filtered.length !== blocks.length) {
+              await chrome.storage.local.set({ [key]: filtered });
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Storage] Error removing future habit instances:', err);
+  }
 }
 
 
