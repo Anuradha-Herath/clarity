@@ -395,6 +395,55 @@
     </div>
   </div>
 
+  <!-- Habit Edit Confirmation Modal -->
+  <div class="modal-overlay hidden" id="habit-confirm-modal-overlay">
+    <div class="modal" style="max-width:380px">
+      <div class="modal-header">
+        <div class="modal-title">Edit Recurring Task</div>
+        <button class="btn btn-ghost btn-icon" id="habit-confirm-modal-close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" style="padding-top: 8px;">
+        <p style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 16px; line-height: 1.4;">
+          This task is generated from a habit. How would you like to apply your changes?
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; line-height: 1.4;">
+            <input type="radio" name="habit-edit-mode" value="only-this" checked style="margin-top: 3px; accent-color: var(--color-accent);" />
+            <div>
+              <strong style="display: block; color: var(--color-text);">This task only</strong>
+              <span style="font-size: 11px; color: var(--color-text-muted);">Changes only affect this day's task.</span>
+            </div>
+          </label>
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; line-height: 1.4;">
+            <input type="radio" name="habit-edit-mode" value="following" style="margin-top: 3px; accent-color: var(--color-accent);" />
+            <div>
+              <strong style="display: block; color: var(--color-text);">This and following tasks</strong>
+              <span style="font-size: 11px; color: var(--color-text-muted);">Changes affect this and all future tasks of this habit.</span>
+            </div>
+          </label>
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; line-height: 1.4;">
+            <input type="radio" name="habit-edit-mode" value="all" style="margin-top: 3px; accent-color: var(--color-accent);" />
+            <div>
+              <strong style="display: block; color: var(--color-text);">The habit itself (All tasks)</strong>
+              <span style="font-size: 11px; color: var(--color-text-muted);">Changes template. Affects all tasks (past, present, & future).</span>
+            </div>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer modal-footer-split">
+        <button class="btn btn-secondary" id="btn-habit-confirm-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-habit-confirm-save">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Month day hover task preview tooltip -->
   <div id="month-hover-preview" class="month-hover-preview hidden"></div>
 

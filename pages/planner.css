@@ -545,8 +545,7 @@
 }
 
 .month-dow-headers .month-weekend {
-  color: var(--color-danger);
-  opacity: 0.7;
+  color: #0F9D58;
 }
 
 /* Calendar grid */
@@ -1254,4 +1253,31 @@
   font-weight: 600;
   margin-left: auto;
 }
+
+/* Weekend Highlights */
+.week-col.is-weekend {
+  background: #F5FDF6;
+}
+.week-col.is-weekend .week-col-header {
+  background: #F5FDF6;
+}
+.week-col.is-weekend .week-day-name,
+.week-col.is-weekend .week-day-num {
+  color: #0F9D58;
+}
+.week-col.is-weekend .week-col-header:hover {
+  background: #E8F7EC;
+}
+
+.month-day-cell.is-weekend {
+  background: #F5FDF6;
+}
+.month-day-cell.is-weekend .month-day-num {
+  color: #0F9D58;
+}
+.month-day-cell.is-weekend:hover {
+  background: #E8F7EC;
+}
+
+
 

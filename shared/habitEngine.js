@@ -131,6 +131,10 @@ export function generateHabitInstances(habit, dateRange) {
 
     if (isScheduled && habit.timeSlots && Array.isArray(habit.timeSlots)) {
       for (const slot of habit.timeSlots) {
+        const exceptionKey = `${dateStr}_${slot.time}`;
+        if (habit.exceptions && habit.exceptions.includes(exceptionKey)) {
+          continue;
+        }
         const hasMultipleSlots = habit.timeSlots.length > 1;
         const slotSuffix = hasMultipleSlots ? ` (${slot.label || slot.time})` : '';
         instances.push({

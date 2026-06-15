@@ -496,6 +496,12 @@ const taskPriorityInput= document.getElementById('task-priority-input');
 const taskCategoryInput= document.getElementById('task-category-input');
 const taskEstimateInput= document.getElementById('task-estimate-input');
 
+// Habit edit confirmation modal selectors
+const habitConfirmModalOverlay = document.getElementById('habit-confirm-modal-overlay');
+const habitConfirmModalClose   = document.getElementById('habit-confirm-modal-close');
+const btnHabitConfirmCancel    = document.getElementById('btn-habit-confirm-cancel');
+const btnHabitConfirmSave      = document.getElementById('btn-habit-confirm-save');
+
 // Subtasks modal selectors
 const taskSubtaskInput = document.getElementById('task-subtask-input');
 const btnAddSubtask    = document.getElementById('btn-add-subtask');
@@ -588,6 +594,10 @@ function closeTaskModal() {
   editingTaskDate = null;
 }
 
+function closeHabitConfirmModal() {
+  habitConfirmModalOverlay.classList.add('hidden');
+}
+
 async function saveTask() {
   const title = taskTitleInput.value.trim();
   if (!title) { taskTitleInput.focus(); return; }
@@ -599,6 +609,28 @@ async function saveTask() {
   const targetDate = editingTaskDate || currentDate;
 
   if (editingTask) {
+    if (editingTask.habitId) {
+      const titleChanged = title !== editingTask.title;
+      const priorityChanged = priority !== editingTask.priority;
+      const categoryChanged = category !== editingTask.category;
+      const estimateChanged = timeEstimate !== editingTask.timeEstimate;
+      const subtasksChanged = JSON.stringify(subtasks) !== JSON.stringify(editingTask.subtasks || []);
+      
+      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged) {
+        habitConfirmModalOverlay.classList.remove('hidden');
+        btnHabitConfirmSave.onclick = async () => {
+          const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
+          await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks }, editMode);
+          closeHabitConfirmModal();
+          closeTaskModal();
+          await refreshActiveTab();
+          try {
+            await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
+          } catch (e) {}
+        };
+        return;
+      }
+    }
     await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks });
   } else {
     await addTask(targetDate, {
@@ -625,6 +657,11 @@ taskModalClose.addEventListener('click', closeTaskModal);
 btnTaskCancel.addEventListener('click', closeTaskModal);
 btnTaskSave.addEventListener('click', saveTask);
 taskModalOverlay.addEventListener('click', (e) => { if (e.target === taskModalOverlay) closeTaskModal(); });
+
+habitConfirmModalClose.addEventListener('click', closeHabitConfirmModal);
+btnHabitConfirmCancel.addEventListener('click', closeHabitConfirmModal);
+habitConfirmModalOverlay.addEventListener('click', (e) => { if (e.target === habitConfirmModalOverlay) closeHabitConfirmModal(); });
+
 btnTaskDelete.addEventListener('click', async () => {
   if (!editingTask) return;
   const targetDate = editingTaskDate || currentDate;
@@ -636,7 +673,13 @@ taskTitleInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); saveTask(); }
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !taskModalOverlay.classList.contains('hidden')) closeTaskModal();
+  if (e.key === 'Escape') {
+    if (!habitConfirmModalOverlay.classList.contains('hidden')) {
+      closeHabitConfirmModal();
+    } else if (!taskModalOverlay.classList.contains('hidden')) {
+      closeTaskModal();
+    }
+  }
 });
 
 // ── Categories management modal ─────────────────────────────────────────────
@@ -867,15 +910,16 @@ async function renderWeekTab() {
 
   dates.forEach((date, i) => {
     const isToday  = date === TODAY;
+    const isWeekend = i === 5 || i === 6;
     const dateObj  = new Date(date + 'T12:00:00');
     const dateNum  = dateObj.getDate();
     const tasks    = tasksByDay[i];
 
     const col = document.createElement('div');
-    col.className = 'week-col';
+    col.className = `week-col${isWeekend ? ' is-weekend' : ''}`;
 
-    const hdrClass = `week-col-header${isToday ? ' is-today' : ''}`;
-    const numClass = `week-day-num${isToday ? ' is-today-num' : ''}`;
+    const hdrClass = `week-col-header${isToday ? ' is-today' : ''}${isWeekend ? ' is-weekend' : ''}`;
+    const numClass = `week-day-num${isToday ? ' is-today-num' : ''}${isWeekend ? ' is-weekend-num' : ''}`;
 
     const dayTotal = tasks.length;
     const dayCompleted = tasks.filter(t => t.done).length;
@@ -1340,10 +1384,11 @@ async function renderMonthTab() {
   displayDates.forEach(({ date, current }, i) => {
     const counts  = countData[i];
     const isToday = date === TODAY;
+    const isWeekend = (i % 7 === 5 || i % 7 === 6);
     const dateNum = new Date(date + 'T12:00:00').getDate();
 
     const cell = document.createElement('div');
-    cell.className = `month-day-cell${isToday ? ' is-today' : ''}${!current ? ' other-month' : ''}`;
+    cell.className = `month-day-cell${isToday ? ' is-today' : ''}${!current ? ' other-month' : ''}${isWeekend ? ' is-weekend' : ''}`;
 
     const isCompleted = counts.tasks > 0 && counts.done === counts.tasks;
 

@@ -355,12 +355,154 @@ export async function addTask(date, task) {
  * @param {object} patch
  * @returns {Promise<void>}
  */
-export async function updateTask(date, id, patch) {
+export async function updateTask(date, id, patch, editMode = null) {
   const tasks = (await get(`tasks_${date}`)) ?? [];
   const task = tasks.find(t => t.id === id);
+  if (!task) return;
+
+  if (task.habitId && editMode) {
+    const habits = await getHabits();
+    const habitIndex = habits.findIndex(h => h.id === task.habitId);
+    
+    if (habitIndex !== -1) {
+      const habit = habits[habitIndex];
+      
+      if (editMode === 'only-this') {
+        const exceptionKey = `${date}_${task.habitTime}`;
+        if (!habit.exceptions) habit.exceptions = [];
+        if (!habit.exceptions.includes(exceptionKey)) {
+          habit.exceptions.push(exceptionKey);
+        }
+        await saveHabits(habits);
+        
+        patch.habitId = null;
+        patch.habitTime = null;
+        
+        const blocks = await getBlocks(date);
+        const block = blocks.find(b => b.habitId === habit.id && b.habitTime === task.habitTime);
+        if (block) {
+          block.habitId = null;
+          block.habitTime = null;
+          if (patch.title) block.title = patch.title;
+          if (patch.category) block.cat = patch.category;
+          await setBlocks(date, blocks);
+        }
+      } else if (editMode === 'following') {
+        if (patch.title) habit.name = patch.title;
+        if (patch.category) habit.category = patch.category;
+        await saveHabits(habits);
+        
+        const allStorage = await chrome.storage.local.get(null);
+        for (const key of Object.keys(allStorage)) {
+          if (key.startsWith('tasks_')) {
+            const datePart = key.slice('tasks_'.length);
+            if (datePart >= date) {
+              const tasksList = allStorage[key];
+              if (Array.isArray(tasksList)) {
+                let changed = false;
+                for (const t of tasksList) {
+                  if (t.habitId === habit.id) {
+                    if (patch.title) {
+                      const hasMultipleSlots = habit.timeSlots && habit.timeSlots.length > 1;
+                      const slotSuffix = hasMultipleSlots ? ` (${t.habitTime})` : '';
+                      t.title = `${patch.title}${slotSuffix}`;
+                    }
+                    if (patch.category) t.category = patch.category;
+                    if (patch.priority !== undefined) t.priority = patch.priority;
+                    if (patch.timeEstimate !== undefined) t.timeEstimate = patch.timeEstimate;
+                    if (patch.subtasks !== undefined) t.subtasks = patch.subtasks;
+                    changed = true;
+                  }
+                }
+                if (changed) {
+                  await chrome.storage.local.set({ [key]: tasksList });
+                }
+              }
+            }
+          }
+          if (key.startsWith('blocks_')) {
+            const datePart = key.slice('blocks_'.length);
+            if (datePart >= date) {
+              const blocksList = allStorage[key];
+              if (Array.isArray(blocksList)) {
+                let changed = false;
+                for (const b of blocksList) {
+                  if (b.habitId === habit.id) {
+                    if (patch.title) {
+                      const hasMultipleSlots = habit.timeSlots && habit.timeSlots.length > 1;
+                      const slotSuffix = hasMultipleSlots ? ` (${b.habitTime})` : '';
+                      b.title = `${patch.title}${slotSuffix}`;
+                    }
+                    if (patch.category) b.cat = patch.category;
+                    changed = true;
+                  }
+                }
+                if (changed) {
+                  await chrome.storage.local.set({ [key]: blocksList });
+                }
+              }
+            }
+          }
+        }
+      } else if (editMode === 'all') {
+        if (patch.title) habit.name = patch.title;
+        if (patch.category) habit.category = patch.category;
+        await saveHabits(habits);
+        
+        const allStorage = await chrome.storage.local.get(null);
+        for (const key of Object.keys(allStorage)) {
+          if (key.startsWith('tasks_')) {
+            const tasksList = allStorage[key];
+            if (Array.isArray(tasksList)) {
+              let changed = false;
+              for (const t of tasksList) {
+                if (t.habitId === habit.id) {
+                  if (patch.title) {
+                    const hasMultipleSlots = habit.timeSlots && habit.timeSlots.length > 1;
+                    const slotSuffix = hasMultipleSlots ? ` (${t.habitTime})` : '';
+                    t.title = `${patch.title}${slotSuffix}`;
+                  }
+                  if (patch.category) t.category = patch.category;
+                  if (patch.priority !== undefined) t.priority = patch.priority;
+                  if (patch.timeEstimate !== undefined) t.timeEstimate = patch.timeEstimate;
+                  if (patch.subtasks !== undefined) t.subtasks = patch.subtasks;
+                  changed = true;
+                }
+              }
+              if (changed) {
+                await chrome.storage.local.set({ [key]: tasksList });
+              }
+            }
+          }
+          if (key.startsWith('blocks_')) {
+            const blocksList = allStorage[key];
+            if (Array.isArray(blocksList)) {
+              let changed = false;
+              for (const b of blocksList) {
+                if (b.habitId === habit.id) {
+                  if (patch.title) {
+                    const hasMultipleSlots = habit.timeSlots && habit.timeSlots.length > 1;
+                    const slotSuffix = hasMultipleSlots ? ` (${b.habitTime})` : '';
+                    b.title = `${patch.title}${slotSuffix}`;
+                  }
+                  if (patch.category) b.cat = patch.category;
+                  changed = true;
+                }
+              }
+              if (changed) {
+                await chrome.storage.local.set({ [key]: blocksList });
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   await update(`tasks_${date}`, id, patch);
-  if (task && task.habitId && 'done' in patch) {
-    await handleHabitCompletionToggle(date, task.habitId, task.habitTime, patch.done);
+  const updatedTask = (await get(`tasks_${date}`))?.find(t => t.id === id);
+  if (updatedTask && updatedTask.habitId && 'done' in patch) {
+    await handleHabitCompletionToggle(date, updatedTask.habitId, updatedTask.habitTime, patch.done);
   }
 }
 
