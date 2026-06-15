@@ -5,7 +5,8 @@
 import {
   getHabits, saveHabits, getTasks, updateTask, generateId, todayKey, dateKey,
   removeFutureHabitInstances,
-  initAutoSync
+  initAutoSync,
+  getCustomCategories
 } from '../../shared/storage.js';
 
 // SVG Definitions for preset icons
@@ -21,14 +22,37 @@ const HABIT_ICONS = {
   Smile: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>`
 };
 
-const CATEGORIES_COLOR = {
-  'Deep Work': { bg: 'var(--cat-deepwork-bg)', acc: 'var(--cat-deepwork-acc)', txt: 'var(--cat-deepwork-text)' },
-  'Meetings':  { bg: 'var(--cat-meetings-bg)', acc: 'var(--cat-meetings-acc)', txt: 'var(--cat-meetings-text)' },
-  'Health':    { bg: 'var(--cat-health-bg)', acc: 'var(--cat-health-acc)', txt: 'var(--cat-health-text)' },
-  'Learning':  { bg: 'var(--cat-learning-bg)', acc: 'var(--cat-learning-acc)', txt: 'var(--cat-learning-text)' },
-  'Personal':  { bg: 'var(--cat-personal-bg)', acc: 'var(--cat-personal-acc)', txt: 'var(--cat-personal-text)' },
-  'Break':     { bg: 'var(--cat-break-bg)', acc: 'var(--cat-break-acc)', txt: 'var(--cat-break-text)' }
-};
+export function getCategoryColor(cat) {
+  const palettes = [
+    { bg: '#F5F3FF', acc: '#7C3AED', txt: '#5B21B6' }, // Purple
+    { bg: '#EEF2FF', acc: '#4F46E5', txt: '#3730A3' }, // Indigo
+    { bg: '#FFF1F2', acc: '#E11D48', txt: '#BE123C' }, // Red
+    { bg: '#F0FDF4', acc: '#16A34A', txt: '#15803D' }, // Green
+    { bg: '#FFFBEB', acc: '#D97706', txt: '#B45309' }, // Amber
+    { bg: '#ECFDF5', acc: '#059669', txt: '#047857' }, // Emerald
+    { bg: '#F0FDFA', acc: '#0D9488', txt: '#0F766E' }, // Teal
+    { bg: '#F0F9FF', acc: '#0284C7', txt: '#0369A1' }, // Sky
+    { bg: '#F4F4F5', acc: '#71717A', txt: '#3F3F46' }, // Zinc
+  ];
+  
+  const lowerCat = String(cat ?? '').toLowerCase();
+  if (lowerCat.includes('personal')) return palettes[0];
+  if (lowerCat.includes('academic') || lowerCat.includes('study') || lowerCat.includes('school')) return palettes[1];
+  if (lowerCat.includes('meeting') || lowerCat.includes('call') || lowerCat.includes('zoom')) return palettes[2];
+  if (lowerCat.includes('gym') || lowerCat.includes('health') || lowerCat.includes('workout') || lowerCat.includes('exercise')) return palettes[3];
+  if (lowerCat.includes('chore') || lowerCat.includes('home') || lowerCat.includes('house')) return palettes[4];
+  if (lowerCat.includes('company') || lowerCat.includes('work') || lowerCat.includes('job')) return palettes[7];
+  if (lowerCat.includes('project') || lowerCat.includes('extension')) return palettes[5];
+  if (lowerCat.includes('break') || lowerCat.includes('rest') || lowerCat.includes('sleep')) return palettes[8];
+
+  let hash = 0;
+  const str = String(cat ?? '');
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const idx = Math.abs(hash) % palettes.length;
+  return palettes[idx];
+}
 
 // Date math helper (local time)
 function parseLocal(str) {
@@ -93,6 +117,7 @@ async function init() {
     await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
   } catch (_) {}
 
+  await populateCategoryPicker();
   await loadData();
   renderIconPicker();
   setupEventListeners();
@@ -116,19 +141,34 @@ async function loadData() {
   renderAllHabits();
 }
 
-function setupEventListeners() {
-  btnNewHabit.addEventListener('click', () => openModal());
-  btnCloseModal.addEventListener('click', closeModal);
-  btnCancelModal.addEventListener('click', closeModal);
+async function populateCategoryPicker() {
+  const picker = document.getElementById('habit-category-picker');
+  if (!picker) return;
+  const categories = await getCustomCategories();
   
-  // Category Pickers
-  document.querySelectorAll('.category-picker .cat-pill').forEach(btn => {
+  picker.innerHTML = '';
+  categories.forEach(cat => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cat-pill';
+    btn.dataset.cat = cat;
+    btn.textContent = cat;
+    picker.appendChild(btn);
+  });
+  
+  picker.querySelectorAll('.cat-pill').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.category-picker .cat-pill').forEach(b => b.classList.remove('active'));
+      picker.querySelectorAll('.cat-pill').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       fieldCategory.value = btn.dataset.cat;
     });
   });
+}
+
+function setupEventListeners() {
+  btnNewHabit.addEventListener('click', () => openModal());
+  btnCloseModal.addEventListener('click', closeModal);
+  btnCancelModal.addEventListener('click', closeModal);
 
   // Recurrence Selectors
   document.querySelectorAll('.recurrence-selector .rec-btn').forEach(btn => {
@@ -242,7 +282,7 @@ function checkCelebrations() {
 
 // ─── Modals & Form Helpers ──────────────────────────────────────────────────────
 
-function openModal(habit = null) {
+async function openModal(habit = null) {
   modal.classList.remove('hidden');
   habitForm.reset();
   timeSlotsContainer.innerHTML = '';
@@ -265,7 +305,7 @@ function openModal(habit = null) {
 
     // Category
     fieldCategory.value = habit.category;
-    const catBtn = document.querySelector(`.category-picker .cat-pill[data-cat="${habit.category}"]`);
+    const catBtn = Array.from(document.querySelectorAll('.category-picker .cat-pill')).find(btn => btn.dataset.cat === habit.category);
     if (catBtn) catBtn.classList.add('active');
 
     // Icon
@@ -328,10 +368,15 @@ function openModal(habit = null) {
     fieldId.value = '';
     
     // Set default category & icon
-    fieldCategory.value = 'Deep Work';
-    document.querySelector('.category-picker .cat-pill[data-cat="Deep Work"]').classList.add('active');
+    const categories = await getCustomCategories();
+    const defaultCat = categories[0] || 'Personal';
+    fieldCategory.value = defaultCat;
+    const catBtn = Array.from(document.querySelectorAll('.category-picker .cat-pill')).find(btn => btn.dataset.cat === defaultCat);
+    if (catBtn) catBtn.classList.add('active');
+
     fieldIcon.value = 'Book';
-    document.querySelector('.icon-picker-btn[data-icon="Book"]').classList.add('active');
+    const iconBtn = document.querySelector('.icon-picker-btn[data-icon="Book"]');
+    if (iconBtn) iconBtn.classList.add('active');
 
     // Default Recurrence "Every Day"
     fieldRecType.value = 'daily';
@@ -487,7 +532,7 @@ function renderTodayHabits() {
     const habit = allHabits.find(h => h.id === task.habitId);
     if (!habit) return;
 
-    const colors = CATEGORIES_COLOR[habit.category] || CATEGORIES_COLOR['Deep Work'];
+    const colors = getCategoryColor(habit.category);
     const streak = habit.streak?.current || 0;
 
     // Create row
@@ -548,7 +593,7 @@ function renderAllHabits() {
     const container = groups[habit.status];
     if (!container) return;
 
-    const colors = CATEGORIES_COLOR[habit.category] || CATEGORIES_COLOR['Deep Work'];
+    const colors = getCategoryColor(habit.category);
     const streak = habit.streak?.current || 0;
     const longest = habit.streak?.longest || 0;
 

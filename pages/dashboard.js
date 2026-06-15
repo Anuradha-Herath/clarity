@@ -12,6 +12,7 @@ import {
   generateId, todayKey, dateKey,
   getHabits,
   initAutoSync,
+  getCustomCategories,
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
@@ -75,23 +76,41 @@ function renderGreeting() {
 }
 
 // ─── Category pills ────────────────────────────────────────────────────────────
-let activeCat = 'Deep Work';
+let activeCat = null;
 
-document.getElementById('dash-cat-bar').querySelectorAll('.cat-pill').forEach((pill) => {
-  pill.addEventListener('click', () => {
-    document.querySelectorAll('#dash-cat-bar .cat-pill').forEach((p) => p.classList.remove('selected'));
-    pill.classList.add('selected');
-    activeCat = pill.dataset.cat;
+async function populateCategoryPills() {
+  const categories = await getCustomCategories();
+  const catBar = document.getElementById('dash-cat-bar');
+  if (!catBar) return;
+  
+  if (categories.length > 0 && (!activeCat || activeCat === 'Deep Work')) {
+    activeCat = categories[0];
+  }
+  
+  // Re-generate category pills
+  let html = `<span class="cat-bar-label">Category:</span>`;
+  categories.forEach((cat) => {
+    const isSelected = cat === activeCat;
+    html += `<div class="cat-pill${isSelected ? ' selected' : ''}" data-cat="${escHtml(cat)}">${escHtml(cat)}</div>`;
   });
-});
+  html += `<span class="dash-cat-hint">Drag grid to create a block</span>`;
+  
+  catBar.innerHTML = html;
+  
+  catBar.querySelectorAll('.cat-pill').forEach((pill) => {
+    pill.addEventListener('click', () => {
+      catBar.querySelectorAll('.cat-pill').forEach((p) => p.classList.remove('selected'));
+      pill.classList.add('selected');
+      activeCat = pill.dataset.cat;
+    });
+  });
+}
 
 // ─── Time board ────────────────────────────────────────────────────────────────
 const TODAY = todayKey();
 
 const boardWrap = document.getElementById('dash-board-wrap');
-const board = mountTimeboard(boardWrap, TODAY, {
-  getSelectedCat: () => activeCat,
-});
+let board = null;
 
 // ─── ══════════════════════════════════════════════════════
 //     TODAY'S TASKS
@@ -400,6 +419,10 @@ async function init() {
   } catch (_) {}
 
   renderGreeting();
+  await populateCategoryPills();
+  board = mountTimeboard(boardWrap, TODAY, {
+    getSelectedCat: () => activeCat,
+  });
   await Promise.all([
     renderTasks(),
     renderInbox(),

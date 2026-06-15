@@ -15,16 +15,40 @@ import {
 import { showConfirm, showAlert } from '../shared/dialog.js';
 
 // ─── Category colour helper ────────────────────────────────────────────────────
-const CAT_STYLES = {
-  'Deep Work': { bg: '#EEF2FF', color: '#3730A3' },
-  'Meetings':  { bg: '#FFF1F2', color: '#BE123C' },
-  'Health':    { bg: '#F0FDF4', color: '#15803D' },
-  'Learning':  { bg: '#FFFBEB', color: '#B45309' },
-  'Personal':  { bg: '#F5F3FF', color: '#5B21B6' },
-  'Break':     { bg: '#F8FAFC', color: '#475569' },
-};
+function getCategoryColor(cat) {
+  const palettes = [
+    { bg: '#F5F3FF', color: '#5B21B6' }, // Purple
+    { bg: '#EEF2FF', color: '#3730A3' }, // Indigo
+    { bg: '#FFF1F2', color: '#BE123C' }, // Red
+    { bg: '#F0FDF4', color: '#15803D' }, // Green
+    { bg: '#FFFBEB', color: '#B45309' }, // Amber
+    { bg: '#ECFDF5', color: '#047857' }, // Emerald
+    { bg: '#F0FDFA', color: '#0F766E' }, // Teal
+    { bg: '#F0F9FF', color: '#0369A1' }, // Sky
+    { bg: '#F4F4F5', color: '#3F3F46' }, // Zinc
+  ];
+  
+  const lowerCat = String(cat ?? '').toLowerCase();
+  if (lowerCat.includes('personal')) return palettes[0];
+  if (lowerCat.includes('academic') || lowerCat.includes('study') || lowerCat.includes('school')) return palettes[1];
+  if (lowerCat.includes('meeting') || lowerCat.includes('call') || lowerCat.includes('zoom')) return palettes[2];
+  if (lowerCat.includes('gym') || lowerCat.includes('health') || lowerCat.includes('workout') || lowerCat.includes('exercise')) return palettes[3];
+  if (lowerCat.includes('chore') || lowerCat.includes('home') || lowerCat.includes('house')) return palettes[4];
+  if (lowerCat.includes('company') || lowerCat.includes('work') || lowerCat.includes('job')) return palettes[7];
+  if (lowerCat.includes('project') || lowerCat.includes('extension')) return palettes[5];
+  if (lowerCat.includes('break') || lowerCat.includes('rest') || lowerCat.includes('sleep')) return palettes[8];
+
+  let hash = 0;
+  const str = String(cat ?? '');
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const idx = Math.abs(hash) % palettes.length;
+  return palettes[idx];
+}
+
 function catPillHTML(cat) {
-  const s = CAT_STYLES[cat] ?? CAT_STYLES['Break'];
+  const s = getCategoryColor(cat);
   return `<span class="pill" style="background:${s.bg};color:${s.color}">${escHtml(cat)}</span>`;
 }
 

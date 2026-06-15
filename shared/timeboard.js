@@ -15,6 +15,7 @@
 import {
   getBlocks, addBlock, updateBlock, deleteBlock,
   generateId, snapHour, formatHour, timeToDec, decimalToTime, todayKey,
+  getCustomCategories,
 } from './storage.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -23,15 +24,37 @@ const BOARD_END   = 23;   // 11 PM
 const PX_PER_HOUR = 48;   // pixels per hour
 const TOTAL_HOURS = BOARD_END - BOARD_START; // 17
 
-const CATEGORIES = ['Deep Work', 'Meetings', 'Health', 'Learning', 'Personal', 'Break'];
-const CAT_STYLE  = {
-  'Deep Work': { bg: '#EEF2FF', acc: '#4F46E5', txt: '#3730A3' },
-  'Meetings':  { bg: '#FFF1F2', acc: '#E11D48', txt: '#BE123C' },
-  'Health':    { bg: '#F0FDF4', acc: '#16A34A', txt: '#15803D' },
-  'Learning':  { bg: '#FFFBEB', acc: '#D97706', txt: '#B45309' },
-  'Personal':  { bg: '#F5F3FF', acc: '#7C3AED', txt: '#5B21B6' },
-  'Break':     { bg: '#F8FAFC', acc: '#94A3B8', txt: '#475569' },
-};
+export function getCategoryColor(cat) {
+  const palettes = [
+    { bg: '#F5F3FF', acc: '#7C3AED', txt: '#5B21B6' }, // Purple
+    { bg: '#EEF2FF', acc: '#4F46E5', txt: '#3730A3' }, // Indigo
+    { bg: '#FFF1F2', acc: '#E11D48', txt: '#BE123C' }, // Red
+    { bg: '#F0FDF4', acc: '#16A34A', txt: '#15803D' }, // Green
+    { bg: '#FFFBEB', acc: '#D97706', txt: '#B45309' }, // Amber
+    { bg: '#ECFDF5', acc: '#059669', txt: '#047857' }, // Emerald
+    { bg: '#F0FDFA', acc: '#0D9488', txt: '#0F766E' }, // Teal
+    { bg: '#F0F9FF', acc: '#0284C7', txt: '#0369A1' }, // Sky
+    { bg: '#F4F4F5', acc: '#71717A', txt: '#3F3F46' }, // Zinc
+  ];
+  
+  const lowerCat = String(cat ?? '').toLowerCase();
+  if (lowerCat.includes('personal')) return palettes[0];
+  if (lowerCat.includes('academic') || lowerCat.includes('study') || lowerCat.includes('school')) return palettes[1];
+  if (lowerCat.includes('meeting') || lowerCat.includes('call') || lowerCat.includes('zoom')) return palettes[2];
+  if (lowerCat.includes('gym') || lowerCat.includes('health') || lowerCat.includes('workout') || lowerCat.includes('exercise')) return palettes[3];
+  if (lowerCat.includes('chore') || lowerCat.includes('home') || lowerCat.includes('house')) return palettes[4];
+  if (lowerCat.includes('company') || lowerCat.includes('work') || lowerCat.includes('job')) return palettes[7];
+  if (lowerCat.includes('project') || lowerCat.includes('extension')) return palettes[5];
+  if (lowerCat.includes('break') || lowerCat.includes('rest') || lowerCat.includes('sleep')) return palettes[8];
+
+  let hash = 0;
+  const str = String(cat ?? '');
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const idx = Math.abs(hash) % palettes.length;
+  return palettes[idx];
+}
 
 // ─── Coordinate helpers ────────────────────────────────────────────────────────
 function hourToPx(h) { return (h - BOARD_START) * PX_PER_HOUR; }
@@ -146,7 +169,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   function makeBlockEl(b) {
     const top    = hourToPx(b.start);
     const height = Math.max(PX_PER_HOUR / 2, hourToPx(b.end) - hourToPx(b.start));
-    const s      = CAT_STYLE[b.cat] ?? CAT_STYLE['Break'];
+    const s      = getCategoryColor(b.cat);
 
     const el = document.createElement('div');
     el.dataset.block = b.id;
@@ -268,9 +291,13 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       let blockCat = getSelectedCat();
       // If task has a category, match or map it
       if (taskData.category) {
-        // Find if taskData.category is an exact match or close match to timeline categories
-        const matched = CATEGORIES.find(c => c.toLowerCase() === taskData.category.toLowerCase());
-        if (matched) blockCat = matched;
+        const categories = await getCustomCategories();
+        const matched = categories.find(c => c.toLowerCase() === taskData.category.toLowerCase());
+        if (matched) {
+          blockCat = matched;
+        } else {
+          blockCat = taskData.category;
+        }
       }
 
       const newBlock = {
@@ -538,34 +565,18 @@ function buildBlockModal() {
 
   // Build category picker
   const picker = overlay.querySelector('[data-cat-picker]');
-  const CAT_S = {
-    'Deep Work': { bg:'#EEF2FF', acc:'#4F46E5', txt:'#3730A3' },
-    'Meetings':  { bg:'#FFF1F2', acc:'#E11D48', txt:'#BE123C' },
-    'Health':    { bg:'#F0FDF4', acc:'#16A34A', txt:'#15803D' },
-    'Learning':  { bg:'#FFFBEB', acc:'#D97706', txt:'#B45309' },
-    'Personal':  { bg:'#F5F3FF', acc:'#7C3AED', txt:'#5B21B6' },
-    'Break':     { bg:'#F8FAFC', acc:'#94A3B8', txt:'#475569' },
-  };
 
-  let selCat = 'Deep Work';
-  const catBtns = {};
-
-  CATEGORIES.forEach((cat) => {
-    const s   = CAT_S[cat];
-    const btn = document.createElement('button');
-    btn.textContent = cat;
-    btn.style.cssText = `padding:4px 10px; border-radius:20px; font-size:11px; font-weight:600;
-      cursor:pointer; background:${s.bg}; color:${s.txt}; border:2px solid transparent;
-      font-family:inherit; transition:border-color 150ms;`;
-    btn.addEventListener('click', () => selectCat(cat));
-    picker.appendChild(btn);
-    catBtns[cat] = btn;
-  });
+  let selCat = 'Personal';
+  let catBtns = {};
+  let categories = [];
 
   function selectCat(cat) {
     selCat = cat;
-    CATEGORIES.forEach((c) => {
-      catBtns[c].style.borderColor = c === cat ? CAT_S[c].acc : 'transparent';
+    categories.forEach((c) => {
+      if (catBtns[c]) {
+        const s = getCategoryColor(c);
+        catBtns[c].style.borderColor = c === cat ? s.acc : 'transparent';
+      }
     });
   }
 
@@ -617,7 +628,7 @@ function buildBlockModal() {
     if (e.key === 'Escape' && !overlay.classList.contains('hidden')) hide();
   });
 
-  function show(block, isNew, cbs) {
+  async function show(block, isNew, cbs) {
     curBlock   = block;
     onSaveCb   = cbs.onSave;
     onDeleteCb = cbs.onDelete;
@@ -628,7 +639,26 @@ function buildBlockModal() {
     q('[data-end]').value       = decimalToTime(block.end);
     q('[data-btn-delete]').style.display = isNew ? 'none' : '';
 
-    selectCat(block.cat ?? 'Deep Work');
+    // Populate category buttons dynamically
+    categories = await getCustomCategories();
+    picker.innerHTML = '';
+    catBtns = {};
+
+    const initialCat = block.cat || categories[0] || 'Personal';
+
+    categories.forEach((cat) => {
+      const s = getCategoryColor(cat);
+      const btn = document.createElement('button');
+      btn.textContent = cat;
+      btn.style.cssText = `padding:4px 10px; border-radius:20px; font-size:11px; font-weight:600;
+        cursor:pointer; background:${s.bg}; color:${s.txt}; border:2px solid transparent;
+        font-family:inherit; transition:border-color 150ms;`;
+      btn.addEventListener('click', () => selectCat(cat));
+      picker.appendChild(btn);
+      catBtns[cat] = btn;
+    });
+
+    selectCat(initialCat);
     overlay.classList.remove('hidden');
     setTimeout(() => titleInput.focus(), 50);
   }
