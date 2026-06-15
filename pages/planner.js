@@ -16,6 +16,9 @@ import {
 
 import { mountTimeboard } from '../shared/timeboard.js';
 import { showConfirm, showAlert } from '../shared/dialog.js';
+import { getSriLankanHoliday } from '../shared/holidays.js';
+
+let showSlHolidays = false;
 
 // ─── Date helpers ──────────────────────────────────────────────────────────────
 function isoDate(d) { return d.toISOString().slice(0, 10); }
@@ -105,6 +108,7 @@ async function switchTab(tab) {
   if (tab === 'day') {
     mountDayBoard();
     renderDayDate();
+    renderDayHolidayBanner();
     await populateCategoryDropdowns();
     await renderPriorityList();
     await loadNotes();
@@ -157,8 +161,39 @@ function renderDayDate() {
   btnGoToday.classList.toggle('hidden', currentDate === TODAY);
 }
 
+function renderDayHolidayBanner() {
+  const banner = document.getElementById('day-holiday-banner');
+  if (!banner) return;
+  if (!showSlHolidays) {
+    banner.classList.add('hidden');
+    banner.innerHTML = '';
+    return;
+  }
+  const holiday = getSriLankanHoliday(currentDate);
+  if (holiday) {
+    banner.innerHTML = `<span class="holiday-tag">Sri Lankan Holiday</span> <span>${holiday.emoji} ${holiday.name}</span>`;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+    banner.innerHTML = '';
+  }
+}
+
+async function refreshCurrentTab() {
+  if (activeTab === 'day') {
+    renderDayHolidayBanner();
+  } else if (activeTab === 'week') {
+    await renderWeekTab();
+  } else if (activeTab === 'month') {
+    await renderMonthTab();
+  } else if (activeTab === 'year') {
+    await renderYearTab();
+  }
+}
+
 async function onDayChanged() {
   renderDayDate();
+  renderDayHolidayBanner();
   if (timeboardInstance) timeboardInstance.refresh(currentDate);
   await renderPriorityList();
   await loadNotes();
@@ -925,10 +960,19 @@ async function renderWeekTab() {
     const dayCompleted = tasks.filter(t => t.done).length;
     const dayPercent = dayTotal > 0 ? Math.round((dayCompleted / dayTotal) * 100) : 0;
 
+    let holidayHtml = '';
+    if (showSlHolidays) {
+      const holiday = getSriLankanHoliday(date);
+      if (holiday) {
+        holidayHtml = `<div class="week-col-holiday" title="${holiday.name}">${holiday.emoji} ${holiday.name}</div>`;
+      }
+    }
+
     col.innerHTML = `
       <div class="${hdrClass}" data-date="${date}">
         <span class="week-day-name">${DAY_LABELS[i]}</span>
         <span class="${numClass}">${dateNum}</span>
+        ${holidayHtml}
         ${dayTotal > 0 ? `
           <div class="week-day-progress-bar-bg" title="${dayCompleted} of ${dayTotal} tasks completed">
             <div class="week-day-progress-bar-fill ${dayPercent === 100 ? 'completed' : ''}" style="width: ${dayPercent}%"></div>
@@ -1244,8 +1288,9 @@ monthHoverPreview.addEventListener('mouseleave', () => {
 async function showTooltip(cell, date) {
   clearTimeout(tooltipTimeout);
   const tasks = await getTasks(date);
+  const holiday = showSlHolidays ? getSriLankanHoliday(date) : null;
   
-  if (!tasks || tasks.length === 0) {
+  if ((!tasks || tasks.length === 0) && !holiday) {
     monthHoverPreview.classList.add('hidden');
     return;
   }
@@ -1253,11 +1298,23 @@ async function showTooltip(cell, date) {
   monthHoverPreview.classList.remove('hidden');
 
   const dateLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  
+  let holidayBannerHtml = '';
+  if (holiday) {
+    holidayBannerHtml = `
+      <div style="background:rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.2); padding:6px 8px; border-radius:6px; margin-bottom:8px; font-size:11px; font-weight:600; color:#D97706; display:flex; align-items:center; gap:6px;">
+        <span>${holiday.emoji}</span>
+        <span>${holiday.name}</span>
+      </div>
+    `;
+  }
+
   monthHoverPreview.innerHTML = `
     <div class="month-preview-title">
       <span>${dateLabel}</span>
       <span style="font-size:10px; opacity:0.8;">${tasks.length} task${tasks.length > 1 ? 's' : ''}</span>
     </div>
+    ${holidayBannerHtml}
     <div class="month-preview-list">
       ${tasks.map((task) => {
         const isCompleted = !!task.done;
@@ -1392,6 +1449,14 @@ async function renderMonthTab() {
 
     const isCompleted = counts.tasks > 0 && counts.done === counts.tasks;
 
+    let holidayHtml = '';
+    if (showSlHolidays) {
+      const holiday = getSriLankanHoliday(date);
+      if (holiday) {
+        holidayHtml = `<div class="month-day-holiday" title="${holiday.name}">${holiday.emoji} ${holiday.name}</div>`;
+      }
+    }
+
     cell.innerHTML = `
       <div class="month-day-num">${dateNum}</div>
       ${current ? `<button class="month-day-quick-add" title="Quick Add Task">+</button>` : ''}
@@ -1403,6 +1468,7 @@ async function renderMonthTab() {
         ` : ''}
         ${counts.blocks > 0 ? `<span class="month-badge month-badge-blocks">${counts.blocks} block${counts.blocks > 1 ? 's' : ''}</span>` : ''}
       </div>
+      ${holidayHtml}
     `;
 
     if (current) {
@@ -1828,7 +1894,21 @@ function updateDailyProgressCard(total, completed) {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
   collapsedCategories = (await get('collapsed_categories')) || [];
+  
+  // Load holidays setting
+  showSlHolidays = !!(await get('show_sl_holidays'));
+  const toggleSlHolidaysCb = document.getElementById('toggle-sl-holidays');
+  if (toggleSlHolidaysCb) {
+    toggleSlHolidaysCb.checked = showSlHolidays;
+    toggleSlHolidaysCb.addEventListener('change', async () => {
+      showSlHolidays = toggleSlHolidaysCb.checked;
+      await set('show_sl_holidays', showSlHolidays);
+      await refreshCurrentTab();
+    });
+  }
+
   renderDayDate();
+  renderDayHolidayBanner();
   mountDayBoard();
   await populateCategoryDropdowns();
   await renderPriorityList();

@@ -27,11 +27,19 @@
     </header>
 
     <!-- ── Tab bar ────────────────────────────────────────── -->
-    <div class="tab-bar" id="planner-tab-bar">
-      <button class="tab-btn active" data-tab="day">Day</button>
-      <button class="tab-btn" data-tab="week">Week</button>
-      <button class="tab-btn" data-tab="month">Month</button>
-      <button class="tab-btn" data-tab="year">Year</button>
+    <div class="tab-bar" id="planner-tab-bar" style="justify-content: space-between; align-items: center; padding-right: 24px;">
+      <div class="tab-btns-group" style="display: flex; gap: 2px;">
+        <button class="tab-btn active" data-tab="day">Day</button>
+        <button class="tab-btn" data-tab="week">Week</button>
+        <button class="tab-btn" data-tab="month">Month</button>
+        <button class="tab-btn" data-tab="year">Year</button>
+      </div>
+      <div class="holiday-toggle-wrapper">
+        <label class="holiday-toggle-label" style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--color-text-muted); cursor: pointer; user-select: none;">
+          <input type="checkbox" id="toggle-sl-holidays" style="accent-color: var(--color-accent); cursor: pointer;" />
+          🇱🇰 Sri Lankan Holidays
+        </label>
+      </div>
     </div>
 
     <!-- ════════════════════════════════════════════════════
@@ -62,6 +70,9 @@
           </svg>
         </button>
       </div>
+      
+      <!-- Holiday Banner -->
+      <div id="day-holiday-banner" class="day-holiday-banner hidden"></div>
 
       <!-- Category pills -->
       <div class="cat-pills-bar" id="cat-pills-bar">

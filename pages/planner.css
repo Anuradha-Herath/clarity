@@ -1279,5 +1279,73 @@
   background: #E8F7EC;
 }
 
+/* Sri Lankan Holidays Styling */
+.day-holiday-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(239, 68, 68, 0.08) 100%);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+  animation: slideDown 0.3s ease;
+}
+
+.day-holiday-banner .holiday-tag {
+  background: linear-gradient(135deg, #F59E0B 0%, #EF4444 100%);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  box-shadow: 0 2px 4px rgba(239, 68, 68, 0.2);
+}
+
+.week-col-holiday {
+  font-size: 10px;
+  color: #D97706;
+  font-weight: 600;
+  margin-top: 4px;
+  text-align: center;
+  max-width: 95%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(245, 158, 11, 0.1);
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.month-day-holiday {
+  font-size: 9px;
+  color: #D97706;
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 4px;
+  padding: 2px 4px;
+  max-width: calc(100% - 8px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 6px;
+  font-weight: 600;
+  text-align: center;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
 
 
