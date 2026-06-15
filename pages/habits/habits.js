@@ -4,7 +4,8 @@
 
 import {
   getHabits, saveHabits, getTasks, updateTask, generateId, todayKey, dateKey,
-  removeFutureHabitInstances
+  removeFutureHabitInstances,
+  initAutoSync
 } from '../../shared/storage.js';
 
 // SVG Definitions for preset icons
@@ -96,7 +97,17 @@ async function init() {
   renderIconPicker();
   setupEventListeners();
   checkCelebrations();
+
+  // Initialize automatic synchronization
+  initAutoSync();
 }
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== 'local') return;
+  if (changes['habits'] || Object.keys(changes).some(key => key.startsWith('tasks_'))) {
+    await loadData();
+  }
+});
 
 async function loadData() {
   allHabits = await getHabits();

@@ -357,6 +357,9 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('[SW] onInstalled:', details.reason);
   await registerDailyAlarms();
 
+  // Register auto-sync alarm (runs every 5 minutes in background)
+  chrome.alarms.create('auto_cloud_sync', { periodInMinutes: 5 });
+
   // Set default settings if not present
   const existing = await swGet('settings');
   if (!existing) {
@@ -377,6 +380,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 chrome.runtime.onStartup.addListener(async () => {
   console.log('[SW] onStartup — re-registering daily alarms');
   await registerDailyAlarms();
+  chrome.alarms.create('auto_cloud_sync', { periodInMinutes: 5 });
 });
 
 // Daily midnight re-registration via a dedicated midnight alarm
@@ -413,6 +417,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       // Re-register daily alarms each midnight in case settings changed
       await registerDailyAlarms();
       await syncHabitsForNext7DaysSW();
+      break;
+
+    case 'auto_cloud_sync':
+      await swPullLatestFromCloud();
       break;
 
     case 'timer_complete':
@@ -796,5 +804,95 @@ async function syncHabitsForNext7DaysSW() {
         await chrome.storage.local.set({ [bKey]: blocks });
       }
     }
+  }
+}
+
+// ─── Cloud sync background tasks ───────────────────────────────────────────────
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAWpNPhuyP6fkd6UlK_6SFLVSFiOtqU6Gg",
+  authDomain: "clarity-app-b599e.firebaseapp.com",
+  projectId: "clarity-app-b599e",
+  storageBucket: "clarity-app-b599e.firebasestorage.app",
+  messagingSenderId: "778165477935",
+  appId: "1:778165477935:web:91d1f577bba63f6f8ddcda",
+  measurementId: "G-05JJY37MZJ"
+};
+
+const FIRESTORE_REST_BASE = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents`;
+
+async function swGetAuth() {
+  try {
+    const auth = await swGet('firebase_auth');
+    if (!auth) return null;
+
+    const now = Date.now();
+    if (auth.expiresAt && now > auth.expiresAt - 5 * 60 * 1000) {
+      const url = `https://securetoken.googleapis.com/v1/token?key=${firebaseConfig.apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `grant_type=refresh_token&refresh_token=${auth.refreshToken}`
+      });
+      if (res.ok) {
+        const data = await res.json();
+        auth.idToken = data.id_token;
+        auth.refreshToken = data.refresh_token;
+        auth.expiresAt = Date.now() + parseInt(data.expires_in) * 1000;
+        await swSet('firebase_auth', auth);
+      } else {
+        console.warn('[SW-Sync] Auth session expired and refresh failed. Signing out.');
+        await new Promise((resolve) => {
+          chrome.storage.local.remove('firebase_auth', resolve);
+        });
+        return null;
+      }
+    }
+    return auth;
+  } catch (err) {
+    console.error('[SW-Sync] Error getting auth session:', err);
+    return null;
+  }
+}
+
+async function swPullLatestFromCloud() {
+  const auth = await swGetAuth();
+  if (!auth) return;
+
+  try {
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data`;
+    const res = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${auth.idToken}`
+      }
+    });
+    if (!res.ok) {
+      if (res.status === 404) return;
+      console.warn('[SW-Sync] Pull from cloud failed:', await res.text());
+      return;
+    }
+    const data = await res.json();
+    if (!data.documents) {
+      return;
+    }
+
+    for (const doc of data.documents) {
+      const parts = doc.name.split('/');
+      const key = parts[parts.length - 1];
+      const fields = doc.fields;
+      if (fields && fields.value && fields.value.stringValue) {
+        try {
+          const parsedVal = JSON.parse(fields.value.stringValue);
+          const localVal = await swGet(key);
+          if (JSON.stringify(localVal) !== JSON.stringify(parsedVal)) {
+            await swSet(key, parsedVal);
+          }
+        } catch (e) {
+          console.error(`[SW-Sync] Error parsing value for pulled key "${key}":`, e);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[SW-Sync] Error pulling from cloud:', err);
   }
 }

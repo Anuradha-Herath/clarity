@@ -166,6 +166,28 @@
   color: var(--color-danger);
 }
 
+.priority-item-add-subtask {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transition: opacity var(--transition), background var(--transition);
+}
+
+.priority-item:hover .priority-item-add-subtask {
+  opacity: 1;
+}
+
+.priority-item-add-subtask:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
 /* Priority quick-add row */
 .priority-add-row {
   display: flex;

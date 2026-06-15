@@ -1066,7 +1066,10 @@ export async function pullLatestFromCloud() {
       if (fields && fields.value && fields.value.stringValue) {
         try {
           const parsedVal = JSON.parse(fields.value.stringValue);
-          await chrome.storage.local.set({ [key]: parsedVal });
+          const localVal = await get(key);
+          if (JSON.stringify(localVal) !== JSON.stringify(parsedVal)) {
+            await chrome.storage.local.set({ [key]: parsedVal });
+          }
         } catch (e) {
           console.error(`[Sync] Error parsing value for pulled key "${key}":`, e);
         }
@@ -1075,6 +1078,44 @@ export async function pullLatestFromCloud() {
   } catch (err) {
     console.error('[Sync] Error pulling from cloud:', err);
   }
+}
+
+let isAutoSyncInitialized = false;
+let lastPullTime = 0;
+const THROTTLE_MS = 15000; // 15 seconds
+
+/**
+ * Hook up automatic synchronization for the current page session.
+ * Throttles cloud pulls on window focus, visibility change, and runs a periodic 60s check.
+ */
+export async function initAutoSync() {
+  if (isAutoSyncInitialized) return;
+  isAutoSyncInitialized = true;
+
+  const runPull = async () => {
+    const now = Date.now();
+    if (now - lastPullTime < THROTTLE_MS) return;
+    lastPullTime = now;
+    try {
+      await pullLatestFromCloud();
+    } catch (err) {
+      console.error('[AutoSync] Pull failed:', err);
+    }
+  };
+
+  // 1. Initial pull on load
+  runPull();
+
+  // 2. Focus and visibility changes
+  window.addEventListener('focus', runPull);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      runPull();
+    }
+  });
+
+  // 3. Periodic pulling (every 60s)
+  setInterval(runPull, 60000);
 }
 
 // ─── Custom Categories helpers ─────────────────────────────────────────────────

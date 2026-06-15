@@ -11,6 +11,7 @@ import {
   getYearlyThemes,
   generateId, todayKey, dateKey,
   getHabits,
+  initAutoSync,
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
@@ -411,6 +412,9 @@ async function init() {
       window.location.href = 'habits/habits.html';
     });
   }
+
+  // Initialize automatic synchronization
+  initAutoSync();
 }
 
 init();

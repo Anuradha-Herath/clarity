@@ -202,7 +202,10 @@
           </svg>
           Prev week
         </button>
-        <div class="week-nav-title" id="week-nav-title">Jun 9 – Jun 15, 2026</div>
+        <div class="week-nav-center" style="display: flex; align-items: center; gap: 8px;">
+          <div class="week-nav-title" id="week-nav-title" style="margin: 0;">Jun 9 – Jun 15, 2026</div>
+          <button class="btn btn-accent-soft btn-sm hidden" id="btn-go-this-week">This Week</button>
+        </div>
         <div class="week-progress-container" style="display: flex; align-items: center; gap: 8px; flex: 0 1 300px; margin: 0 16px;">
           <span id="week-progress-text" style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); white-space: nowrap;">Progress: 0%</span>
           <div class="week-progress-bar-bg" style="flex: 1; height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; position: relative;">
@@ -236,7 +239,10 @@
           </svg>
           Prev
         </button>
-        <div class="month-nav-title" id="month-nav-title">June 2026</div>
+        <div class="month-nav-center" style="display: flex; align-items: center; gap: 8px;">
+          <div class="month-nav-title" id="month-nav-title" style="margin: 0;">June 2026</div>
+          <button class="btn btn-accent-soft btn-sm hidden" id="btn-go-this-month">This Month</button>
+        </div>
         <button class="btn btn-ghost btn-sm" id="btn-next-month">
           Next
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"

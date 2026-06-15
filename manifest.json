@@ -33,6 +33,11 @@
     "notifications",
     "tabs"
   ],
+  "host_permissions": [
+    "https://identitytoolkit.googleapis.com/*",
+    "https://securetoken.googleapis.com/*",
+    "https://firestore.googleapis.com/*"
+  ],
 
   "commands": {
     "_execute_action": {

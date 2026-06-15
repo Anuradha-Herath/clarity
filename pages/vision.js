@@ -10,6 +10,7 @@ import {
   get, set, push, remove, update,
   generateId, compressImage,
   checkStorageSize,
+  initAutoSync,
 } from '../shared/storage.js';
 import { showConfirm, showAlert } from '../shared/dialog.js';
 
@@ -505,6 +506,28 @@ async function init() {
     loadSmartGoals(),
     loadGoals(),
   ]);
+
+  // Initialize automatic synchronization
+  initAutoSync();
 }
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== 'local') return;
+  const keys = Object.keys(changes);
+  const hasVisionChanges = keys.some(key => 
+    key === 'vision' ||
+    key === 'smart_goals' ||
+    key === 'long_goals' ||
+    key === 'short_goals' ||
+    key === 'yearly_themes'
+  );
+  if (hasVisionChanges) {
+    await Promise.all([
+      loadVision(),
+      loadSmartGoals(),
+      loadGoals(),
+    ]);
+  }
+});
 
 init();
