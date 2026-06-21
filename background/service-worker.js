@@ -58,8 +58,41 @@ function swSet(key, value) {
 
 async function swGetSettings() {
   const stored = await swGet('settings');
-  const defaults = { morningTime: '07:00', nightTime: '22:00', theme: 'light' };
+  const defaults = { morningTime: '07:00', nightTime: '22:00', theme: 'light', autoCarryForward: false };
   return { ...defaults, ...(stored ?? {}) };
+}
+
+function swGenerateId() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+}
+
+async function swCarryForwardTasks(fromDate, toDate) {
+  try {
+    const fromKey = `tasks_${fromDate}`;
+    const toKey   = `tasks_${toDate}`;
+    const data = await chrome.storage.local.get([fromKey, toKey]);
+    const from = (data[fromKey] || []).filter((t) => !t.done);
+    const to   = data[toKey] || [];
+    const existingTitles = new Set(to.map((t) => t.title));
+    let count = 0;
+    for (const task of from) {
+      if (!existingTitles.has(task.title)) {
+        to.push({ ...task, id: swGenerateId(), done: false });
+        count++;
+      }
+    }
+    if (count > 0) {
+      await chrome.storage.local.set({ [toKey]: to });
+    }
+    return count;
+  } catch (err) {
+    console.error('[SW] carryForwardTasks failed:', err);
+    return 0;
+  }
 }
 
 function todayKey() {
@@ -363,7 +396,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   // Set default settings if not present
   const existing = await swGet('settings');
   if (!existing) {
-    await swSet('settings', { morningTime: '07:00', nightTime: '22:00', theme: 'light' });
+    await swSet('settings', { morningTime: '07:00', nightTime: '22:00', theme: 'light', autoCarryForward: false });
   }
 
   // Initialize default yearly themes if not present
@@ -417,6 +450,20 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       // Re-register daily alarms each midnight in case settings changed
       await registerDailyAlarms();
       await syncHabitsForNext7DaysSW();
+      // Auto carry-forward incomplete tasks if enabled
+      try {
+        const settings = await swGetSettings();
+        if (settings.autoCarryForward) {
+          const yesterday = dateKey(-1);
+          const today = todayKey();
+          const count = await swCarryForwardTasks(yesterday, today);
+          if (count > 0) {
+            console.log(`[SW] Auto-carried ${count} incomplete task${count === 1 ? '' : 's'} from ${yesterday} to ${today}`);
+          }
+        }
+      } catch (err) {
+        console.error('[SW] Auto carry-forward failed:', err);
+      }
       break;
 
     case 'auto_cloud_sync':

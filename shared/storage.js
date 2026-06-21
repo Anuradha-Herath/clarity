@@ -23,6 +23,7 @@ const DEFAULTS = {
     morningTime: '07:00',
     nightTime: '22:00',
     theme: 'light',
+    autoCarryForward: false,
   },
   vision: {
     text: '',

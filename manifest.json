@@ -64,6 +64,7 @@
         "pages/vision.html",
         "pages/tracker.html",
         "pages/habits/habits.html",
+        "pages/settings/settings.html",
         "capture/capture.html",
         "shared/style.css"
       ],

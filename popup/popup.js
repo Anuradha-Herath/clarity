@@ -28,6 +28,7 @@ const PAGES = {
   planner:   chrome.runtime.getURL('pages/planner.html'),
   vision:    chrome.runtime.getURL('pages/vision.html'),
   tracker:   chrome.runtime.getURL('pages/tracker.html'),
+  settings:  chrome.runtime.getURL('pages/settings/settings.html'),
 };
 
 // ─── Element refs ──────────────────────────────────────────────────────────────
@@ -50,6 +51,7 @@ const setNight        = document.getElementById('set-night');
 const storageUsed     = document.getElementById('storage-used');
 const storageWarning  = document.getElementById('storage-warning');
 const btnSaveSettings = document.getElementById('btn-save-settings');
+const btnOpenSettings = document.getElementById('btn-open-settings');
 
 // Cloud Sync Element refs
 const syncLoggedOut = document.getElementById('sync-logged-out');
@@ -331,6 +333,7 @@ btnSettingsClose.addEventListener('click', () => {
 });
 
 btnSaveSettings.addEventListener('click', saveSettings);
+btnOpenSettings.addEventListener('click', () => openPage(PAGES.settings));
 
 // ─── Cloud Sync Events ────────────────────────────────────────────────────────
 btnSyncSignin.addEventListener('click', async () => {

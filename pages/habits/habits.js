@@ -148,18 +148,27 @@ async function populateCategoryPicker() {
   
   picker.innerHTML = '';
   categories.forEach(cat => {
+    const s = getCategoryColor(cat);
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'cat-pill';
     btn.dataset.cat = cat;
     btn.textContent = cat;
+    btn.style.background = s.bg;
+    btn.style.color = s.txt;
+    btn.style.border = '2px solid transparent';
     picker.appendChild(btn);
   });
   
   picker.querySelectorAll('.cat-pill').forEach(btn => {
     btn.addEventListener('click', () => {
-      picker.querySelectorAll('.cat-pill').forEach(b => b.classList.remove('active'));
+      picker.querySelectorAll('.cat-pill').forEach(b => {
+        b.classList.remove('active');
+        b.style.borderColor = 'transparent';
+      });
       btn.classList.add('active');
+      const s = getCategoryColor(btn.dataset.cat);
+      btn.style.borderColor = s.acc;
       fieldCategory.value = btn.dataset.cat;
     });
   });
@@ -288,7 +297,10 @@ async function openModal(habit = null) {
   timeSlotsContainer.innerHTML = '';
   
   // Reset active pickers
-  document.querySelectorAll('.category-picker .cat-pill').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.category-picker .cat-pill').forEach(b => {
+    b.classList.remove('active');
+    b.style.borderColor = 'transparent';
+  });
   document.querySelectorAll('.icon-picker-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.recurrence-selector .rec-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.rec-sub-input').forEach(div => div.classList.add('hidden'));
@@ -306,7 +318,11 @@ async function openModal(habit = null) {
     // Category
     fieldCategory.value = habit.category;
     const catBtn = Array.from(document.querySelectorAll('.category-picker .cat-pill')).find(btn => btn.dataset.cat === habit.category);
-    if (catBtn) catBtn.classList.add('active');
+    if (catBtn) {
+      catBtn.classList.add('active');
+      const s = getCategoryColor(habit.category);
+      catBtn.style.borderColor = s.acc;
+    }
 
     // Icon
     fieldIcon.value = habit.icon;
@@ -372,7 +388,11 @@ async function openModal(habit = null) {
     const defaultCat = categories[0] || 'Personal';
     fieldCategory.value = defaultCat;
     const catBtn = Array.from(document.querySelectorAll('.category-picker .cat-pill')).find(btn => btn.dataset.cat === defaultCat);
-    if (catBtn) catBtn.classList.add('active');
+    if (catBtn) {
+      catBtn.classList.add('active');
+      const s = getCategoryColor(defaultCat);
+      catBtn.style.borderColor = s.acc;
+    }
 
     fieldIcon.value = 'Book';
     const iconBtn = document.querySelector('.icon-picker-btn[data-icon="Book"]');

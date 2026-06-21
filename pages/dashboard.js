@@ -78,33 +78,7 @@ function renderGreeting() {
 // ─── Category pills ────────────────────────────────────────────────────────────
 let activeCat = null;
 
-async function populateCategoryPills() {
-  const categories = await getCustomCategories();
-  const catBar = document.getElementById('dash-cat-bar');
-  if (!catBar) return;
-  
-  if (categories.length > 0 && (!activeCat || activeCat === 'Deep Work')) {
-    activeCat = categories[0];
-  }
-  
-  // Re-generate category pills
-  let html = `<span class="cat-bar-label">Category:</span>`;
-  categories.forEach((cat) => {
-    const isSelected = cat === activeCat;
-    html += `<div class="cat-pill${isSelected ? ' selected' : ''}" data-cat="${escHtml(cat)}">${escHtml(cat)}</div>`;
-  });
-  html += `<span class="dash-cat-hint">Drag grid to create a block</span>`;
-  
-  catBar.innerHTML = html;
-  
-  catBar.querySelectorAll('.cat-pill').forEach((pill) => {
-    pill.addEventListener('click', () => {
-      catBar.querySelectorAll('.cat-pill').forEach((p) => p.classList.remove('selected'));
-      pill.classList.add('selected');
-      activeCat = pill.dataset.cat;
-    });
-  });
-}
+
 
 // ─── Time board ────────────────────────────────────────────────────────────────
 const TODAY = todayKey();
@@ -419,7 +393,8 @@ async function init() {
   } catch (_) {}
 
   renderGreeting();
-  await populateCategoryPills();
+  const categories = await getCustomCategories();
+  activeCat = categories[0] || 'Personal';
   board = mountTimeboard(boardWrap, TODAY, {
     getSelectedCat: () => activeCat,
   });

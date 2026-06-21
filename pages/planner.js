@@ -205,30 +205,7 @@ async function onDayChanged() {
 }
 
 // Category pills
-async function populateCategoryPills() {
-  const categories = await getCustomCategories();
-  const catPillsBar = document.getElementById('cat-pills-bar');
-  if (!catPillsBar) return;
-  
-  if (categories.length > 0 && (!activeCat || activeCat === 'Deep Work')) {
-    activeCat = categories[0];
-  }
-  
-  let html = `<span class="cat-bar-label">Category:</span>`;
-  categories.forEach((cat) => {
-    const isSelected = cat === activeCat;
-    html += `<div class="cat-pill${isSelected ? ' selected' : ''}" data-cat="${escHtml(cat)}">${escHtml(cat)}</div>`;
-  });
-  catPillsBar.innerHTML = html;
-  
-  catPillsBar.querySelectorAll('.cat-pill').forEach((pill) => {
-    pill.addEventListener('click', () => {
-      catPillsBar.querySelectorAll('.cat-pill').forEach((p) => p.classList.remove('selected'));
-      pill.classList.add('selected');
-      activeCat = pill.dataset.cat;
-    });
-  });
-}
+
 
 // Mount timeboard
 function mountDayBoard() {
@@ -2204,7 +2181,8 @@ async function init() {
 
   renderDayDate();
   renderDayHolidayBanner();
-  await populateCategoryPills();
+  const categories = await getCustomCategories();
+  activeCat = categories[0] || 'Personal';
   mountDayBoard();
   await populateCategoryDropdowns();
   await renderPriorityList();
