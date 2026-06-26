@@ -12,10 +12,14 @@ import {
   generateId, todayKey, dateKey,
   snapHour,
   getCustomCategories, addCustomCategory, deleteCustomCategory, renameCustomCategory,
+  initAutoSync,
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
 import { showConfirm, showAlert } from '../shared/dialog.js';
+import { getSriLankanHoliday } from '../shared/holidays.js';
+
+let showSlHolidays = false;
 
 // ─── Date helpers ──────────────────────────────────────────────────────────────
 function isoDate(d) { return d.toISOString().slice(0, 10); }
@@ -71,12 +75,16 @@ let currentDate      = TODAY;
 let currentWeekStart = getMondayOf(TODAY);
 let currentYear      = new Date().getFullYear();
 let currentMonth     = new Date().getMonth(); // 0-indexed
-let activeCat        = 'Deep Work';
+let activeCat        = null;
 let selectedPriority = 1;
 let activeTab        = 'day';
 let collapsedCategories = [];
 
 let timeboardInstance = null;
+let lastAddedCategory = null;
+let expandedQuickAdds = [];
+let expandedSubtaskAdds = [];
+let lastAddedSubtaskTaskId = null;
 
 // ─── Tab switching ─────────────────────────────────────────────────────────────
 const tabBtns   = document.querySelectorAll('[data-tab]');
@@ -105,6 +113,7 @@ async function switchTab(tab) {
   if (tab === 'day') {
     mountDayBoard();
     renderDayDate();
+    renderDayHolidayBanner();
     await populateCategoryDropdowns();
     await renderPriorityList();
     await loadNotes();
@@ -157,22 +166,46 @@ function renderDayDate() {
   btnGoToday.classList.toggle('hidden', currentDate === TODAY);
 }
 
+function renderDayHolidayBanner() {
+  const banner = document.getElementById('day-holiday-banner');
+  if (!banner) return;
+  if (!showSlHolidays) {
+    banner.classList.add('hidden');
+    banner.innerHTML = '';
+    return;
+  }
+  const holiday = getSriLankanHoliday(currentDate);
+  if (holiday) {
+    banner.innerHTML = `<span class="holiday-tag">Sri Lankan Holiday</span> <span>${holiday.emoji} ${holiday.name}</span>`;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+    banner.innerHTML = '';
+  }
+}
+
+async function refreshCurrentTab() {
+  if (activeTab === 'day') {
+    renderDayHolidayBanner();
+  } else if (activeTab === 'week') {
+    await renderWeekTab();
+  } else if (activeTab === 'month') {
+    await renderMonthTab();
+  } else if (activeTab === 'year') {
+    await renderYearTab();
+  }
+}
+
 async function onDayChanged() {
   renderDayDate();
+  renderDayHolidayBanner();
   if (timeboardInstance) timeboardInstance.refresh(currentDate);
   await renderPriorityList();
   await loadNotes();
 }
 
 // Category pills
-const catPillsBar = document.getElementById('cat-pills-bar');
-catPillsBar.querySelectorAll('.cat-pill').forEach((pill) => {
-  pill.addEventListener('click', () => {
-    catPillsBar.querySelectorAll('.cat-pill').forEach((p) => p.classList.remove('selected'));
-    pill.classList.add('selected');
-    activeCat = pill.dataset.cat;
-  });
-});
+
 
 // Mount timeboard
 function mountDayBoard() {
@@ -237,8 +270,7 @@ categoryFilter.addEventListener('change', () => {
 async function renderPriorityList() {
   const tasks = await getTasks(currentDate);
   // Update progress card
-  const totalTasks = tasks.length;
-  const completedTasks = tasks.filter(t => t.done).length;
+  const { total: totalTasks, completed: completedTasks } = getTaskCompletionStats(tasks);
   updateDailyProgressCard(totalTasks, completedTasks);
 
   // Sort: priority asc, then undone before done
@@ -281,6 +313,7 @@ async function renderPriorityList() {
     renderedCount += catTasks.length;
     const pendingCount = catTasks.filter(t => !t.done).length;
     const isCollapsed = collapsedCategories.includes(cat);
+    const isQuickAddExpanded = expandedQuickAdds.includes(cat);
 
     html += `
       <div class="category-group" data-category="${escHtml(cat)}">
@@ -296,35 +329,76 @@ async function renderPriorityList() {
           <span class="category-group-badge ${pendingCount > 0 ? 'active' : ''}">${pendingCount}</span>
         </div>
         <div class="category-group-list" style="display: ${isCollapsed ? 'none' : 'block'};">
-          ${catTasks.map((t) => `
-            <div class="priority-item-container" style="border-bottom: 1px solid var(--color-border); padding: 7px 0; display: flex; flex-direction: column;">
-              <div class="priority-item" data-id="${t.id}" draggable="true" style="border-bottom: none; padding: 0; cursor: grab;">
-                <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
-                <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
-                <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
-                ${t.timeEstimate ? `<span class="priority-item-est">${t.timeEstimate}m</span>` : ''}
-                <div class="priority-item-delete" data-id="${t.id}" title="Delete">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
-                       fill="none" stroke="currentColor" stroke-width="2.5"
-                       stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="3 6 5 6 21 6"/>
-                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                    <path d="M10 11v6"/><path d="M14 11v6"/>
-                  </svg>
+          ${catTasks.map((t) => {
+            const isSubtaskExpanded = expandedSubtaskAdds.includes(t.id);
+            return `
+              <div class="priority-item-container" style="border-bottom: 1px solid var(--color-border); padding: 7px 0; display: flex; flex-direction: column;">
+                <div class="priority-item" data-id="${t.id}" draggable="true" style="border-bottom: none; padding: 0; cursor: grab;">
+                  <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
+                  <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
+                  <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
+                  ${t.timeEstimate ? `<span class="priority-item-est">${t.timeEstimate}m</span>` : ''}
+                  
+                  <div class="priority-item-add-subtask" data-id="${t.id}" title="Add Subtask">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2.5"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                  </div>
+
+                  <div class="priority-item-delete" data-id="${t.id}" title="Delete">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2.5"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                      <path d="M10 11v6"/><path d="M14 11v6"/>
+                    </svg>
+                  </div>
+                </div>
+                ${t.subtasks && t.subtasks.length > 0 ? `
+                  <div class="subtasks-list" style="margin-left: 28px; margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
+                    ${t.subtasks.map(sub => `
+                      <div class="subtask-item" draggable="true" data-task-id="${t.id}" data-sub-id="${sub.id}" style="display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: grab;">
+                        <input type="checkbox" class="subtask-item-check" data-task-id="${t.id}" data-sub-id="${sub.id}" ${sub.done ? 'checked' : ''} style="width: 12px; height: 12px; accent-color: var(--color-accent); cursor: pointer;" />
+                        <span class="subtask-title-text${sub.done ? ' done-text' : ''}" style="font-size: 12px; color: var(--color-text);">${escHtml(sub.title)}</span>
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : ''}
+                
+                <div class="subtask-quick-add-form" data-task-id="${t.id}" style="display: ${isSubtaskExpanded ? 'flex' : 'none'}; margin-left: 28px; margin-top: 6px; align-items: center; gap: 6px;">
+                  <input type="text" class="input input-sm subtask-quick-add-input" placeholder="New subtask..." data-task-id="${t.id}" style="flex: 1; font-size: 11px; padding: 2px 6px; height: 22px;" />
+                  <button class="btn btn-primary btn-sm subtask-quick-add-btn" data-task-id="${t.id}" style="padding: 2px 8px; font-size: 11px; height: 22px; line-height: 1;">Add</button>
+                  <button class="btn btn-ghost btn-sm subtask-quick-add-cancel" data-task-id="${t.id}" style="padding: 2px; color: var(--color-text-muted);" title="Cancel">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
                 </div>
               </div>
-              ${t.subtasks && t.subtasks.length > 0 ? `
-                <div class="subtasks-list" style="margin-left: 28px; margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
-                  ${t.subtasks.map(sub => `
-                    <div class="subtask-item" draggable="true" data-task-id="${t.id}" data-sub-id="${sub.id}" style="display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: grab;">
-                      <input type="checkbox" class="subtask-item-check" data-task-id="${t.id}" data-sub-id="${sub.id}" ${sub.done ? 'checked' : ''} style="width: 12px; height: 12px; accent-color: var(--color-accent); cursor: pointer;" />
-                      <span class="subtask-title-text${sub.done ? ' done-text' : ''}" style="font-size: 12px; color: var(--color-text);">${escHtml(sub.title)}</span>
-                    </div>
-                  `).join('')}
-                </div>
-              ` : ''}
-            </div>
-          `).join('')}
+            `;
+          }).join('')}
+          <div class="category-quick-add-toggle" data-category="${escHtml(cat)}" style="display: ${isQuickAddExpanded ? 'none' : 'flex'}; padding: 6px 0; color: var(--color-text-muted); cursor: pointer; font-size: 12px; align-items: center; gap: 4px; border-top: 1px dashed var(--color-border); margin-top: 4px; user-select: none;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>Add task</span>
+          </div>
+          <div class="category-quick-add-form" data-category="${escHtml(cat)}" style="display: ${isQuickAddExpanded ? 'flex' : 'none'}; border-top: 1px solid var(--color-border); padding: 8px 0; gap: 8px; align-items: center; margin-top: 4px;">
+            <input type="text" class="input input-sm category-quick-add-input" placeholder="Add a task..." data-category="${escHtml(cat)}" style="flex: 1;" />
+            <button class="btn btn-primary btn-sm category-quick-add-btn" data-category="${escHtml(cat)}">Add</button>
+            <button class="btn btn-ghost btn-sm category-quick-add-cancel" data-category="${escHtml(cat)}" style="padding: 4px 8px; color: var(--color-text-muted);" title="Collapse">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     `;
@@ -336,6 +410,197 @@ async function renderPriorityList() {
   }
 
   priorityList.innerHTML = html;
+
+  // Restore focus to the quick add input if we just added a task to a category
+  if (lastAddedCategory) {
+    const activeInput = priorityList.querySelector(`.category-quick-add-input[data-category="${lastAddedCategory.replace(/"/g, '\\"')}"]`);
+    if (activeInput) {
+      activeInput.focus();
+    }
+    lastAddedCategory = null;
+  }
+
+  // Restore focus to the subtask quick add input if we just added a subtask
+  if (lastAddedSubtaskTaskId) {
+    const activeInput = priorityList.querySelector(`.subtask-quick-add-input[data-task-id="${lastAddedSubtaskTaskId.replace(/"/g, '\\"')}"]`);
+    if (activeInput) {
+      activeInput.focus();
+    }
+    lastAddedSubtaskTaskId = null;
+  }
+
+  // Quick add to category handlers
+  priorityList.querySelectorAll('.category-quick-add-toggle').forEach((toggle) => {
+    toggle.addEventListener('click', () => {
+      const cat = toggle.dataset.category;
+      if (!expandedQuickAdds.includes(cat)) {
+        expandedQuickAdds.push(cat);
+      }
+      const groupEl = toggle.closest('.category-group');
+      const formEl = groupEl.querySelector('.category-quick-add-form');
+      const inputEl = groupEl.querySelector('.category-quick-add-input');
+      toggle.style.display = 'none';
+      if (formEl) formEl.style.display = 'flex';
+      if (inputEl) inputEl.focus();
+    });
+  });
+
+  priorityList.querySelectorAll('.category-quick-add-cancel').forEach((cancel) => {
+    cancel.addEventListener('click', () => {
+      const cat = cancel.dataset.category;
+      expandedQuickAdds = expandedQuickAdds.filter(c => c !== cat);
+      const groupEl = cancel.closest('.category-group');
+      const formEl = groupEl.querySelector('.category-quick-add-form');
+      const toggleEl = groupEl.querySelector('.category-quick-add-toggle');
+      const inputEl = groupEl.querySelector('.category-quick-add-input');
+      if (inputEl) inputEl.value = '';
+      if (formEl) formEl.style.display = 'none';
+      if (toggleEl) toggleEl.style.display = 'flex';
+    });
+  });
+
+  priorityList.querySelectorAll('.category-quick-add-input').forEach((input) => {
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const cat = input.dataset.category;
+        const title = input.value.trim();
+        if (!title) return;
+        
+        lastAddedCategory = cat;
+        await addTask(currentDate, {
+          id: generateId(),
+          title,
+          done: false,
+          priority: selectedPriority || 3,
+          timeEstimate: null,
+          category: cat,
+        });
+        
+        await renderPriorityList();
+      } else if (e.key === 'Escape') {
+        const cat = input.dataset.category;
+        expandedQuickAdds = expandedQuickAdds.filter(c => c !== cat);
+        const groupEl = input.closest('.category-group');
+        const formEl = groupEl.querySelector('.category-quick-add-form');
+        const toggleEl = groupEl.querySelector('.category-quick-add-toggle');
+        input.value = '';
+        if (formEl) formEl.style.display = 'none';
+        if (toggleEl) toggleEl.style.display = 'flex';
+      }
+    });
+  });
+
+  priorityList.querySelectorAll('.category-quick-add-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const cat = btn.dataset.category;
+      const groupEl = btn.closest('.category-group');
+      const input = groupEl ? groupEl.querySelector('.category-quick-add-input') : null;
+      if (!input) return;
+      const title = input.value.trim();
+      if (!title) return;
+      
+      lastAddedCategory = cat;
+      await addTask(currentDate, {
+        id: generateId(),
+        title,
+        done: false,
+        priority: selectedPriority || 3,
+        timeEstimate: null,
+        category: cat,
+      });
+      
+      await renderPriorityList();
+    });
+  });
+
+  // Quick add to subtasks handlers
+  priorityList.querySelectorAll('.priority-item-add-subtask').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const taskId = btn.dataset.id;
+      if (!expandedSubtaskAdds.includes(taskId)) {
+        expandedSubtaskAdds.push(taskId);
+      }
+      const containerEl = btn.closest('.priority-item-container');
+      const formEl = containerEl ? containerEl.querySelector('.subtask-quick-add-form') : null;
+      const inputEl = containerEl ? containerEl.querySelector('.subtask-quick-add-input') : null;
+      if (formEl) formEl.style.display = 'flex';
+      if (inputEl) inputEl.focus();
+    });
+  });
+
+  priorityList.querySelectorAll('.subtask-quick-add-cancel').forEach((cancel) => {
+    cancel.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const taskId = cancel.dataset.taskId;
+      expandedSubtaskAdds = expandedSubtaskAdds.filter(id => id !== taskId);
+      const containerEl = cancel.closest('.priority-item-container');
+      const formEl = containerEl ? containerEl.querySelector('.subtask-quick-add-form') : null;
+      const inputEl = containerEl ? containerEl.querySelector('.subtask-quick-add-input') : null;
+      if (inputEl) inputEl.value = '';
+      if (formEl) formEl.style.display = 'none';
+    });
+  });
+
+  priorityList.querySelectorAll('.subtask-quick-add-input').forEach((input) => {
+    input.addEventListener('keydown', async (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const taskId = input.dataset.taskId;
+        const title = input.value.trim();
+        if (!title) return;
+        
+        const tasks = await getTasks(currentDate);
+        const t = tasks.find(x => x.id === taskId);
+        if (t) {
+          t.subtasks = t.subtasks || [];
+          t.subtasks.push({
+            id: generateId(),
+            title,
+            done: false
+          });
+          await updateTask(currentDate, taskId, { subtasks: t.subtasks });
+          lastAddedSubtaskTaskId = taskId;
+          await renderPriorityList();
+        }
+      } else if (e.key === 'Escape') {
+        const taskId = input.dataset.taskId;
+        expandedSubtaskAdds = expandedSubtaskAdds.filter(id => id !== taskId);
+        const containerEl = input.closest('.priority-item-container');
+        const formEl = containerEl ? containerEl.querySelector('.subtask-quick-add-form') : null;
+        input.value = '';
+        if (formEl) formEl.style.display = 'none';
+      }
+    });
+  });
+
+  priorityList.querySelectorAll('.subtask-quick-add-btn').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const taskId = btn.dataset.taskId;
+      const containerEl = btn.closest('.priority-item-container');
+      const input = containerEl ? containerEl.querySelector('.subtask-quick-add-input') : null;
+      if (!input) return;
+      const title = input.value.trim();
+      if (!title) return;
+      
+      const tasks = await getTasks(currentDate);
+      const t = tasks.find(x => x.id === taskId);
+      if (t) {
+        t.subtasks = t.subtasks || [];
+        t.subtasks.push({
+          id: generateId(),
+          title,
+          done: false
+        });
+        await updateTask(currentDate, taskId, { subtasks: t.subtasks });
+        lastAddedSubtaskTaskId = taskId;
+        await renderPriorityList();
+      }
+    });
+  });
 
   // Collapse toggle
   priorityList.querySelectorAll('.category-group-header').forEach((hdr) => {
@@ -358,15 +623,14 @@ async function renderPriorityList() {
       const taskId = cb.dataset.id;
       const tasks = await getTasks(currentDate);
       
-      const totalBefore = tasks.length;
-      const completedBefore = tasks.filter(t => t.done).length;
+      const statsBefore = getTaskCompletionStats(tasks);
 
       await updateTask(currentDate, taskId, { done: isChecked });
       
       const updatedTasks = await getTasks(currentDate);
-      const completedAfter = updatedTasks.filter(t => t.done).length;
+      const statsAfter = getTaskCompletionStats(updatedTasks);
       
-      if (isChecked && completedAfter === totalBefore && completedBefore < totalBefore && totalBefore > 0) {
+      if (isChecked && statsAfter.completed === statsAfter.total && statsBefore.completed < statsBefore.total && statsBefore.total > 0) {
         triggerConfettiCelebration();
       }
 
@@ -382,8 +646,7 @@ async function renderPriorityList() {
       const isChecked = cb.checked;
       const tasks = await getTasks(currentDate);
       
-      const totalBefore = tasks.length;
-      const completedBefore = tasks.filter(t => t.done).length;
+      const statsBefore = getTaskCompletionStats(tasks);
 
       const t = tasks.find(x => x.id === taskId);
       if (t && t.subtasks) {
@@ -393,9 +656,9 @@ async function renderPriorityList() {
           await updateTask(currentDate, taskId, { subtasks: t.subtasks });
           
           const updatedTasks = await getTasks(currentDate);
-          const completedAfter = updatedTasks.filter(t => t.done).length;
+          const statsAfter = getTaskCompletionStats(updatedTasks);
           
-          if (isChecked && completedAfter === totalBefore && completedBefore < totalBefore && totalBefore > 0) {
+          if (isChecked && statsAfter.completed === statsAfter.total && statsBefore.completed < statsBefore.total && statsBefore.total > 0) {
             triggerConfettiCelebration();
           }
 
@@ -496,6 +759,12 @@ const taskPriorityInput= document.getElementById('task-priority-input');
 const taskCategoryInput= document.getElementById('task-category-input');
 const taskEstimateInput= document.getElementById('task-estimate-input');
 
+// Habit edit confirmation modal selectors
+const habitConfirmModalOverlay = document.getElementById('habit-confirm-modal-overlay');
+const habitConfirmModalClose   = document.getElementById('habit-confirm-modal-close');
+const btnHabitConfirmCancel    = document.getElementById('btn-habit-confirm-cancel');
+const btnHabitConfirmSave      = document.getElementById('btn-habit-confirm-save');
+
 // Subtasks modal selectors
 const taskSubtaskInput = document.getElementById('task-subtask-input');
 const btnAddSubtask    = document.getElementById('btn-add-subtask');
@@ -588,6 +857,10 @@ function closeTaskModal() {
   editingTaskDate = null;
 }
 
+function closeHabitConfirmModal() {
+  habitConfirmModalOverlay.classList.add('hidden');
+}
+
 async function saveTask() {
   const title = taskTitleInput.value.trim();
   if (!title) { taskTitleInput.focus(); return; }
@@ -599,6 +872,28 @@ async function saveTask() {
   const targetDate = editingTaskDate || currentDate;
 
   if (editingTask) {
+    if (editingTask.habitId) {
+      const titleChanged = title !== editingTask.title;
+      const priorityChanged = priority !== editingTask.priority;
+      const categoryChanged = category !== editingTask.category;
+      const estimateChanged = timeEstimate !== editingTask.timeEstimate;
+      const subtasksChanged = JSON.stringify(subtasks) !== JSON.stringify(editingTask.subtasks || []);
+      
+      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged) {
+        habitConfirmModalOverlay.classList.remove('hidden');
+        btnHabitConfirmSave.onclick = async () => {
+          const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
+          await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks }, editMode);
+          closeHabitConfirmModal();
+          closeTaskModal();
+          await refreshActiveTab();
+          try {
+            await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
+          } catch (e) {}
+        };
+        return;
+      }
+    }
     await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks });
   } else {
     await addTask(targetDate, {
@@ -625,6 +920,11 @@ taskModalClose.addEventListener('click', closeTaskModal);
 btnTaskCancel.addEventListener('click', closeTaskModal);
 btnTaskSave.addEventListener('click', saveTask);
 taskModalOverlay.addEventListener('click', (e) => { if (e.target === taskModalOverlay) closeTaskModal(); });
+
+habitConfirmModalClose.addEventListener('click', closeHabitConfirmModal);
+btnHabitConfirmCancel.addEventListener('click', closeHabitConfirmModal);
+habitConfirmModalOverlay.addEventListener('click', (e) => { if (e.target === habitConfirmModalOverlay) closeHabitConfirmModal(); });
+
 btnTaskDelete.addEventListener('click', async () => {
   if (!editingTask) return;
   const targetDate = editingTaskDate || currentDate;
@@ -636,7 +936,13 @@ taskTitleInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); saveTask(); }
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !taskModalOverlay.classList.contains('hidden')) closeTaskModal();
+  if (e.key === 'Escape') {
+    if (!habitConfirmModalOverlay.classList.contains('hidden')) {
+      closeHabitConfirmModal();
+    } else if (!taskModalOverlay.classList.contains('hidden')) {
+      closeTaskModal();
+    }
+  }
 });
 
 // ── Categories management modal ─────────────────────────────────────────────
@@ -822,6 +1128,7 @@ const weekGrid     = document.getElementById('week-grid');
 const weekNavTitle = document.getElementById('week-nav-title');
 const btnPrevWeek  = document.getElementById('btn-prev-week');
 const btnNextWeek  = document.getElementById('btn-next-week');
+const btnGoThisWeek = document.getElementById('btn-go-this-week');
 
 btnPrevWeek.addEventListener('click', () => {
   const d = new Date(currentWeekStart + 'T12:00:00');
@@ -837,9 +1144,18 @@ btnNextWeek.addEventListener('click', () => {
   renderWeekTab();
 });
 
+btnGoThisWeek.addEventListener('click', () => {
+  currentWeekStart = getMondayOf(TODAY);
+  renderWeekTab();
+});
+
 async function renderWeekTab() {
   const dates   = getWeekDates(currentWeekStart);
   const lastDay = dates[6];
+
+  if (btnGoThisWeek) {
+    btnGoThisWeek.classList.toggle('hidden', currentWeekStart === getMondayOf(TODAY));
+  }
 
   weekNavTitle.textContent = `${fmtShort(dates[0])} – ${fmtShort(lastDay)}, ${new Date(dates[0] + 'T12:00:00').getFullYear()}`;
 
@@ -850,8 +1166,9 @@ async function renderWeekTab() {
   let totalWeeklyTasks = 0;
   let completedWeeklyTasks = 0;
   tasksByDay.forEach(dayTasks => {
-    totalWeeklyTasks += dayTasks.length;
-    completedWeeklyTasks += dayTasks.filter(t => t.done).length;
+    const stats = getTaskCompletionStats(dayTasks);
+    totalWeeklyTasks += stats.total;
+    completedWeeklyTasks += stats.completed;
   });
   const weeklyPercent = totalWeeklyTasks > 0 ? Math.round((completedWeeklyTasks / totalWeeklyTasks) * 100) : 0;
   const weekProgressText = document.getElementById('week-progress-text');
@@ -867,24 +1184,35 @@ async function renderWeekTab() {
 
   dates.forEach((date, i) => {
     const isToday  = date === TODAY;
+    const isWeekend = i === 5 || i === 6;
     const dateObj  = new Date(date + 'T12:00:00');
     const dateNum  = dateObj.getDate();
     const tasks    = tasksByDay[i];
 
     const col = document.createElement('div');
-    col.className = 'week-col';
+    col.className = `week-col${isWeekend ? ' is-weekend' : ''}`;
 
-    const hdrClass = `week-col-header${isToday ? ' is-today' : ''}`;
-    const numClass = `week-day-num${isToday ? ' is-today-num' : ''}`;
+    const hdrClass = `week-col-header${isToday ? ' is-today' : ''}${isWeekend ? ' is-weekend' : ''}`;
+    const numClass = `week-day-num${isToday ? ' is-today-num' : ''}${isWeekend ? ' is-weekend-num' : ''}`;
 
-    const dayTotal = tasks.length;
-    const dayCompleted = tasks.filter(t => t.done).length;
+    const stats = getTaskCompletionStats(tasks);
+    const dayTotal = stats.total;
+    const dayCompleted = stats.completed;
     const dayPercent = dayTotal > 0 ? Math.round((dayCompleted / dayTotal) * 100) : 0;
+
+    let holidayHtml = '';
+    if (showSlHolidays) {
+      const holiday = getSriLankanHoliday(date);
+      if (holiday) {
+        holidayHtml = `<div class="week-col-holiday" title="${holiday.name}">${holiday.emoji} ${holiday.name}</div>`;
+      }
+    }
 
     col.innerHTML = `
       <div class="${hdrClass}" data-date="${date}">
         <span class="week-day-name">${DAY_LABELS[i]}</span>
         <span class="${numClass}">${dateNum}</span>
+        ${holidayHtml}
         ${dayTotal > 0 ? `
           <div class="week-day-progress-bar-bg" title="${dayCompleted} of ${dayTotal} tasks completed">
             <div class="week-day-progress-bar-fill ${dayPercent === 100 ? 'completed' : ''}" style="width: ${dayPercent}%"></div>
@@ -1092,6 +1420,7 @@ const monthGrid       = document.getElementById('month-grid');
 const monthNavTitle   = document.getElementById('month-nav-title');
 const btnPrevMonth    = document.getElementById('btn-prev-month');
 const btnNextMonth    = document.getElementById('btn-next-month');
+const btnGoThisMonth   = document.getElementById('btn-go-this-month');
 
 // New Month Tab selectors
 const monthStatsBanner   = document.getElementById('month-stats-banner');
@@ -1112,6 +1441,13 @@ btnPrevMonth.addEventListener('click', () => {
 btnNextMonth.addEventListener('click', () => {
   currentMonth++;
   if (currentMonth > 11) { currentMonth = 0; currentYear++; }
+  renderMonthTab();
+});
+
+btnGoThisMonth.addEventListener('click', () => {
+  const d = new Date();
+  currentMonth = d.getMonth();
+  currentYear = d.getFullYear();
   renderMonthTab();
 });
 
@@ -1200,8 +1536,9 @@ monthHoverPreview.addEventListener('mouseleave', () => {
 async function showTooltip(cell, date) {
   clearTimeout(tooltipTimeout);
   const tasks = await getTasks(date);
+  const holiday = showSlHolidays ? getSriLankanHoliday(date) : null;
   
-  if (!tasks || tasks.length === 0) {
+  if ((!tasks || tasks.length === 0) && !holiday) {
     monthHoverPreview.classList.add('hidden');
     return;
   }
@@ -1209,11 +1546,23 @@ async function showTooltip(cell, date) {
   monthHoverPreview.classList.remove('hidden');
 
   const dateLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  
+  let holidayBannerHtml = '';
+  if (holiday) {
+    holidayBannerHtml = `
+      <div style="background:rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.2); padding:6px 8px; border-radius:6px; margin-bottom:8px; font-size:11px; font-weight:600; color:#D97706; display:flex; align-items:center; gap:6px;">
+        <span>${holiday.emoji}</span>
+        <span>${holiday.name}</span>
+      </div>
+    `;
+  }
+
   monthHoverPreview.innerHTML = `
     <div class="month-preview-title">
       <span>${dateLabel}</span>
       <span style="font-size:10px; opacity:0.8;">${tasks.length} task${tasks.length > 1 ? 's' : ''}</span>
     </div>
+    ${holidayBannerHtml}
     <div class="month-preview-list">
       ${tasks.map((task) => {
         const isCompleted = !!task.done;
@@ -1266,6 +1615,12 @@ function hideTooltip() {
 }
 
 async function renderMonthTab() {
+  const realDate = new Date();
+  const isThisMonth = currentMonth === realDate.getMonth() && currentYear === realDate.getFullYear();
+  if (btnGoThisMonth) {
+    btnGoThisMonth.classList.toggle('hidden', isThisMonth);
+  }
+
   monthNavTitle.textContent = fmtMonthYear(currentYear, currentMonth);
   monthGrid.innerHTML = '';
 
@@ -1301,9 +1656,10 @@ async function renderMonthTab() {
   const countData = await Promise.all(
     displayDates.map(async ({ date }) => {
       const [tasks, blocks] = await Promise.all([getTasks(date), getBlocks(date)]);
+      const stats = getTaskCompletionStats(tasks);
       return {
-        tasks: tasks.length,
-        done:  tasks.filter((t) => t.done).length,
+        tasks: stats.total,
+        done:  stats.completed,
         blocks: blocks.length,
       };
     })
@@ -1340,12 +1696,21 @@ async function renderMonthTab() {
   displayDates.forEach(({ date, current }, i) => {
     const counts  = countData[i];
     const isToday = date === TODAY;
+    const isWeekend = (i % 7 === 5 || i % 7 === 6);
     const dateNum = new Date(date + 'T12:00:00').getDate();
 
     const cell = document.createElement('div');
-    cell.className = `month-day-cell${isToday ? ' is-today' : ''}${!current ? ' other-month' : ''}`;
+    cell.className = `month-day-cell${isToday ? ' is-today' : ''}${!current ? ' other-month' : ''}${isWeekend ? ' is-weekend' : ''}`;
 
     const isCompleted = counts.tasks > 0 && counts.done === counts.tasks;
+
+    let holidayHtml = '';
+    if (showSlHolidays) {
+      const holiday = getSriLankanHoliday(date);
+      if (holiday) {
+        holidayHtml = `<div class="month-day-holiday" title="${holiday.name}">${holiday.emoji} ${holiday.name}</div>`;
+      }
+    }
 
     cell.innerHTML = `
       <div class="month-day-num">${dateNum}</div>
@@ -1358,6 +1723,7 @@ async function renderMonthTab() {
         ` : ''}
         ${counts.blocks > 0 ? `<span class="month-badge month-badge-blocks">${counts.blocks} block${counts.blocks > 1 ? 's' : ''}</span>` : ''}
       </div>
+      ${holidayHtml}
     `;
 
     if (current) {
@@ -1738,6 +2104,23 @@ function triggerConfettiCelebration() {
   draw();
 }
 
+function getTaskCompletionStats(tasks) {
+  let total = 0;
+  let completed = 0;
+  tasks.forEach(t => {
+    if (t.subtasks && t.subtasks.length > 0) {
+      total += t.subtasks.length;
+      completed += t.subtasks.filter(s => s.done).length;
+    } else {
+      total += 1;
+      if (t.done) {
+        completed += 1;
+      }
+    }
+  });
+  return { total, completed };
+}
+
 function updateDailyProgressCard(total, completed) {
   const card = document.getElementById('daily-progress-card');
   if (!card) return;
@@ -1783,11 +2166,55 @@ function updateDailyProgressCard(total, completed) {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
   collapsedCategories = (await get('collapsed_categories')) || [];
+  
+  // Load holidays setting
+  showSlHolidays = !!(await get('show_sl_holidays'));
+  const toggleSlHolidaysCb = document.getElementById('toggle-sl-holidays');
+  if (toggleSlHolidaysCb) {
+    toggleSlHolidaysCb.checked = showSlHolidays;
+    toggleSlHolidaysCb.addEventListener('change', async () => {
+      showSlHolidays = toggleSlHolidaysCb.checked;
+      await set('show_sl_holidays', showSlHolidays);
+      await refreshCurrentTab();
+    });
+  }
+
   renderDayDate();
+  renderDayHolidayBanner();
+  const categories = await getCustomCategories();
+  activeCat = categories[0] || 'Personal';
   mountDayBoard();
   await populateCategoryDropdowns();
   await renderPriorityList();
   await loadNotes();
+
+  // Initialize automatic synchronization
+  initAutoSync();
 }
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== 'local') return;
+
+  const keys = Object.keys(changes);
+  const hasPlannerChanges = keys.some(key => 
+    key.startsWith('blocks_') || 
+    key.startsWith('tasks_') || 
+    key.startsWith('notes_') || 
+    key === 'notes' || 
+    key === 'collapsed_categories' || 
+    key === 'task_categories' ||
+    key === 'monthly_themes' ||
+    key === 'monthly_goals' ||
+    key === 'show_sl_holidays'
+  );
+
+  if (hasPlannerChanges) {
+    if (activeTab === 'day') {
+      await onDayChanged();
+    } else {
+      await refreshActiveTab();
+    }
+  }
+});
 
 init();

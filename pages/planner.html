@@ -20,17 +20,26 @@
       <nav class="header-nav">
         <a href="dashboard.html" class="nav-link">Dashboard</a>
         <a href="planner.html"   class="nav-link active">Planner</a>
+        <a href="habits/habits.html" class="nav-link">Habits</a>
         <a href="vision.html"    class="nav-link">Vision</a>
         <a href="tracker.html"   class="nav-link">Tracker</a>
       </nav>
     </header>
 
     <!-- ── Tab bar ────────────────────────────────────────── -->
-    <div class="tab-bar" id="planner-tab-bar">
-      <button class="tab-btn active" data-tab="day">Day</button>
-      <button class="tab-btn" data-tab="week">Week</button>
-      <button class="tab-btn" data-tab="month">Month</button>
-      <button class="tab-btn" data-tab="year">Year</button>
+    <div class="tab-bar" id="planner-tab-bar" style="justify-content: space-between; align-items: center; padding-right: 24px;">
+      <div class="tab-btns-group" style="display: flex; gap: 2px;">
+        <button class="tab-btn active" data-tab="day">Day</button>
+        <button class="tab-btn" data-tab="week">Week</button>
+        <button class="tab-btn" data-tab="month">Month</button>
+        <button class="tab-btn" data-tab="year">Year</button>
+      </div>
+      <div class="holiday-toggle-wrapper">
+        <label class="holiday-toggle-label" style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--color-text-muted); cursor: pointer; user-select: none;">
+          <input type="checkbox" id="toggle-sl-holidays" style="accent-color: var(--color-accent); cursor: pointer;" />
+          🇱🇰 Sri Lankan Holidays
+        </label>
+      </div>
     </div>
 
     <!-- ════════════════════════════════════════════════════
@@ -61,17 +70,11 @@
           </svg>
         </button>
       </div>
+      
+      <!-- Holiday Banner -->
+      <div id="day-holiday-banner" class="day-holiday-banner hidden"></div>
 
-      <!-- Category pills -->
-      <div class="cat-pills-bar" id="cat-pills-bar">
-        <span class="cat-bar-label">Category:</span>
-        <div class="cat-pill selected" data-cat="Deep Work">Deep Work</div>
-        <div class="cat-pill" data-cat="Meetings">Meetings</div>
-        <div class="cat-pill" data-cat="Health">Health</div>
-        <div class="cat-pill" data-cat="Learning">Learning</div>
-        <div class="cat-pill" data-cat="Personal">Personal</div>
-        <div class="cat-pill" data-cat="Break">Break</div>
-      </div>
+
 
       <!-- Day main: board + side panel -->
       <div class="day-main">
@@ -190,7 +193,10 @@
           </svg>
           Prev week
         </button>
-        <div class="week-nav-title" id="week-nav-title">Jun 9 – Jun 15, 2026</div>
+        <div class="week-nav-center" style="display: flex; align-items: center; gap: 8px;">
+          <div class="week-nav-title" id="week-nav-title" style="margin: 0;">Jun 9 – Jun 15, 2026</div>
+          <button class="btn btn-accent-soft btn-sm hidden" id="btn-go-this-week">This Week</button>
+        </div>
         <div class="week-progress-container" style="display: flex; align-items: center; gap: 8px; flex: 0 1 300px; margin: 0 16px;">
           <span id="week-progress-text" style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); white-space: nowrap;">Progress: 0%</span>
           <div class="week-progress-bar-bg" style="flex: 1; height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; position: relative;">
@@ -224,7 +230,10 @@
           </svg>
           Prev
         </button>
-        <div class="month-nav-title" id="month-nav-title">June 2026</div>
+        <div class="month-nav-center" style="display: flex; align-items: center; gap: 8px;">
+          <div class="month-nav-title" id="month-nav-title" style="margin: 0;">June 2026</div>
+          <button class="btn btn-accent-soft btn-sm hidden" id="btn-go-this-month">This Month</button>
+        </div>
         <button class="btn btn-ghost btn-sm" id="btn-next-month">
           Next
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
@@ -390,6 +399,55 @@
         <div class="categories-list" id="manage-categories-list" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: var(--border-radius); background: var(--color-bg); padding: 4px;">
           <!-- Populate with existing categories and delete options -->
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Habit Edit Confirmation Modal -->
+  <div class="modal-overlay hidden" id="habit-confirm-modal-overlay">
+    <div class="modal" style="max-width:380px">
+      <div class="modal-header">
+        <div class="modal-title">Edit Recurring Task</div>
+        <button class="btn btn-ghost btn-icon" id="habit-confirm-modal-close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" style="padding-top: 8px;">
+        <p style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 16px; line-height: 1.4;">
+          This task is generated from a habit. How would you like to apply your changes?
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; line-height: 1.4;">
+            <input type="radio" name="habit-edit-mode" value="only-this" checked style="margin-top: 3px; accent-color: var(--color-accent);" />
+            <div>
+              <strong style="display: block; color: var(--color-text);">This task only</strong>
+              <span style="font-size: 11px; color: var(--color-text-muted);">Changes only affect this day's task.</span>
+            </div>
+          </label>
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; line-height: 1.4;">
+            <input type="radio" name="habit-edit-mode" value="following" style="margin-top: 3px; accent-color: var(--color-accent);" />
+            <div>
+              <strong style="display: block; color: var(--color-text);">This and following tasks</strong>
+              <span style="font-size: 11px; color: var(--color-text-muted);">Changes affect this and all future tasks of this habit.</span>
+            </div>
+          </label>
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; line-height: 1.4;">
+            <input type="radio" name="habit-edit-mode" value="all" style="margin-top: 3px; accent-color: var(--color-accent);" />
+            <div>
+              <strong style="display: block; color: var(--color-text);">The habit itself (All tasks)</strong>
+              <span style="font-size: 11px; color: var(--color-text-muted);">Changes template. Affects all tasks (past, present, & future).</span>
+            </div>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer modal-footer-split">
+        <button class="btn btn-secondary" id="btn-habit-confirm-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-habit-confirm-save">Save Changes</button>
       </div>
     </div>
   </div>

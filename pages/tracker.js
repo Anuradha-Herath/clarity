@@ -4,7 +4,7 @@
  * ES Module.
  */
 
-import { get, set, push, generateId, todayKey, getTasks, getBlocks, updateTask, formatHour } from '../shared/storage.js';
+import { get, set, push, generateId, todayKey, getTasks, getBlocks, updateTask, formatHour, initAutoSync } from '../shared/storage.js';
 import { showConfirm, showAlert } from '../shared/dialog.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -180,53 +180,67 @@ async function saveStateToStorage() {
 }
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
-  if (area === 'local' && changes['timer_state']) {
+  if (area !== 'local') return;
+
+  if (changes['timer_state']) {
     const newState = changes['timer_state'].newValue;
-    if (!newState) return;
+    if (newState) {
+      if (newState.mode !== currentMode || newState.running !== running || Math.abs(newState.remaining - remaining) > 2 || newState.linkedId !== linkedId || newState.label !== timerLabel.value) {
+        currentMode = newState.mode;
+        running = newState.running;
+        focusCount = newState.focusCount ?? 0;
+        totalToday = newState.totalToday ?? 0;
+        timerLabel.value = newState.label ?? '';
+        linkedId = newState.linkedId ?? null;
+        linkedType = newState.linkedType ?? null;
+        linkedTitle = newState.linkedTitle ?? '';
 
-    if (newState.mode !== currentMode || newState.running !== running || Math.abs(newState.remaining - remaining) > 2 || newState.linkedId !== linkedId || newState.label !== timerLabel.value) {
-      currentMode = newState.mode;
-      running = newState.running;
-      focusCount = newState.focusCount ?? 0;
-      totalToday = newState.totalToday ?? 0;
-      timerLabel.value = newState.label ?? '';
-      linkedId = newState.linkedId ?? null;
-      linkedType = newState.linkedType ?? null;
-      linkedTitle = newState.linkedTitle ?? '';
+        if (running) {
+          remaining = Math.max(0, Math.round((newState.targetTime - Date.now()) / 1000));
+          if (!tickHandle) {
+            lastTick = Date.now();
+            tickHandle = setInterval(tick, 250);
+          }
+          timerRingWrap.classList.add('running');
+          iconPlay.classList.add('hidden');
+          iconPause.classList.remove('hidden');
+        } else {
+          remaining = newState.remaining;
+          if (tickHandle) {
+            clearInterval(tickHandle);
+            tickHandle = null;
+          }
+          timerRingWrap.classList.remove('running');
+          iconPlay.classList.remove('hidden');
+          iconPause.classList.add('hidden');
+        }
 
-      if (running) {
-        remaining = Math.max(0, Math.round((newState.targetTime - Date.now()) / 1000));
-        if (!tickHandle) {
-          lastTick = Date.now();
-          tickHandle = setInterval(tick, 250);
-        }
-        timerRingWrap.classList.add('running');
-        iconPlay.classList.add('hidden');
-        iconPause.classList.remove('hidden');
-      } else {
-        remaining = newState.remaining;
-        if (tickHandle) {
-          clearInterval(tickHandle);
-          tickHandle = null;
-        }
-        timerRingWrap.classList.remove('running');
-        iconPlay.classList.remove('hidden');
-        iconPause.classList.add('hidden');
+        timerPanel.className = `timer-panel mode-${currentMode}`;
+        ringProgress.style.stroke = MODES[currentMode].color;
+
+        // Update tab UI
+        modeTabs.forEach((t) => t.classList.toggle('active', t.dataset.mode === currentMode));
+
+        updateDisplay();
+        updateSessionDots();
+        updateLinkedUI();
+        await refreshStats();
+        await renderLog();
+        await renderAgenda();
       }
-
-      timerPanel.className = `timer-panel mode-${currentMode}`;
-      ringProgress.style.stroke = MODES[currentMode].color;
-
-      // Update tab UI
-      modeTabs.forEach((t) => t.classList.toggle('active', t.dataset.mode === currentMode));
-
-      updateDisplay();
-      updateSessionDots();
-      updateLinkedUI();
-      await refreshStats();
-      await renderLog();
-      await renderAgenda();
     }
+  }
+
+  const keys = Object.keys(changes);
+  const hasLogOrAgendaChanges = keys.some(key => 
+    key === 'time_logs' || 
+    key.startsWith('blocks_') || 
+    key.startsWith('tasks_')
+  );
+  if (hasLogOrAgendaChanges) {
+    await refreshStats();
+    await renderLog();
+    await renderAgenda();
   }
 });
 
@@ -764,6 +778,9 @@ async function init() {
   await refreshStats();
   await renderLog();
   await renderAgenda();
+
+  // Initialize automatic synchronization
+  initAutoSync();
 }
 
 // ─── Agenda & Linking Logic ──────────────────────────────────────────────────
