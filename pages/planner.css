@@ -1368,6 +1368,150 @@
   }
 }
 
+/* ── Fixed Events Styles ────────────────────────────────────── */
+
+.day-fixed-events-banner-zone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+.fixed-event-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+  user-select: none;
+  border: 1.5px solid transparent;
+}
+.fixed-event-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.fixed-event-chip.deadline {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+.fixed-event-chip.deadline:hover {
+  background-color: #fecaca;
+}
+.fixed-event-chip.appointment {
+  background-color: #dbeafe;
+  color: #3b82f6;
+  border-color: #93c5fd;
+}
+.fixed-event-chip.appointment:hover {
+  background-color: #bfdbfe;
+}
+.fixed-event-chip.reminder {
+  background-color: #ffedd5;
+  color: #b45309;
+  border-color: #fdba74;
+}
+.fixed-event-chip.reminder:hover {
+  background-color: #fed7aa;
+}
+
+.countdown-banner {
+  animation: slideDown 250ms ease-out;
+}
+
+.countdown-banner.deadline {
+  background-color: #fff5f5;
+  border-color: #fee2e2;
+}
+
+.countdown-banner.appointment {
+  background-color: #f0f7ff;
+  border-color: #e0f2fe;
+}
+
+.week-fixed-events-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border-bottom: none;
+}
+.week-fixed-events-cell:not(:empty) {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.month-day-fixed-events-container {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.month-event-pill {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(100% - 8px);
+  margin-left: 4px;
+  transition: all 150ms ease;
+}
+.month-event-pill:hover {
+  transform: translateX(1px);
+  filter: brightness(0.95);
+}
+
+.month-event-pill.deadline {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-left-color: #b91c1c;
+}
+
+.month-event-pill.appointment {
+  background-color: #dbeafe;
+  color: #3b82f6;
+  border-left-color: #3b82f6;
+}
+
+.month-event-pill.reminder {
+  background-color: #ffedd5;
+  color: #b45309;
+  border-left-color: #b45309;
+}
+
+.month-event-pill-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.month-event-more {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-top: 1px;
+  padding-left: 10px;
+}
+
 
 
 
