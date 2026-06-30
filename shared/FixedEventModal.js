@@ -5,7 +5,7 @@
  */
 
 import { getCustomCategories, getAuth } from './storage.js';
-import { addFixedEvent, updateFixedEvent, deleteFixedEvent } from './fixedEventsService.js';
+import { addFixedEvent, updateFixedEvent, deleteFixedEvent, toggleFixedEventComplete } from './fixedEventsService.js';
 import { showConfirm, showAlert } from './dialog.js';
 
 let modalOverlay = null;
@@ -53,6 +53,15 @@ function ensureModalHtml() {
           <label class="label" for="fe-title" style="display:block; font-size:11px; font-weight:600; color:var(--color-text-muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px;">Title</label>
           <input type="text" id="fe-title" class="input" placeholder="e.g. Submit assignment, Team meeting..." maxlength="120" style="width: 100%; box-sizing: border-box;" />
         </div>
+
+        <!-- Completion Checkbox (Conditional) -->
+        <div class="form-group" id="fe-completion-group" style="display: none; align-items: center; gap: 8px; margin-top: -4px;">
+          <input type="checkbox" id="fe-completed" style="width: auto; height: auto; margin: 0; cursor: pointer; accent-color: var(--color-accent);" />
+          <label for="fe-completed" style="font-size: 13px; font-weight: 500; color: var(--color-text); cursor: pointer; user-select: none; margin: 0; display: flex; align-items: center; gap: 6px;">
+            <span>Mark as completed</span>
+            <span id="fe-completed-at" style="font-size: 11px; color: var(--color-text-muted); font-weight: normal; margin-left: 4px;"></span>
+          </label>
+        </div>
         
         <!-- Type Pill Selector -->
         <div class="form-group">
@@ -80,6 +89,7 @@ function ensureModalHtml() {
         <div class="form-group" id="fe-enddate-group" style="display: none;">
           <label class="label" for="fe-enddate" style="display:block; font-size:11px; font-weight:600; color:var(--color-text-muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px;">End Date</label>
           <input type="date" id="fe-enddate" class="input" style="width: 100%; box-sizing: border-box;" />
+          <div id="fe-enddate-error" style="color: #ef4444; font-size: 11px; margin-top: 4px; display: none;"></div>
         </div>
         
         <!-- All Day Toggle -->
@@ -151,8 +161,52 @@ function ensureModalHtml() {
     updateTimeFieldsVisibility();
   });
 
+  const completedCheckbox = modalOverlay.querySelector('#fe-completed');
+  const completedAtSpan = modalOverlay.querySelector('#fe-completed-at');
+  const dateInput = modalOverlay.querySelector('#fe-date');
+  const endDateInput = modalOverlay.querySelector('#fe-enddate');
+  const enddateError = modalOverlay.querySelector('#fe-enddate-error');
+
+  function validateDatesInline() {
+    if (multidayCheckbox.checked && dateInput.value && endDateInput.value) {
+      if (endDateInput.value < dateInput.value) {
+        enddateError.textContent = 'End Date cannot be before the Start Date.';
+        enddateError.style.display = 'block';
+        endDateInput.style.borderColor = '#ef4444';
+        return false;
+      }
+    }
+    enddateError.textContent = '';
+    enddateError.style.display = 'none';
+    endDateInput.style.borderColor = '';
+    return true;
+  }
+
+  dateInput.addEventListener('change', validateDatesInline);
+  endDateInput.addEventListener('change', validateDatesInline);
+
   multidayCheckbox.addEventListener('change', () => {
     updateEndDateVisibility();
+    validateDatesInline();
+  });
+
+  completedCheckbox.addEventListener('change', async () => {
+    const isCompleted = completedCheckbox.checked;
+    if (isCompleted) {
+      const nowStr = new Date().toISOString();
+      const dateLabel = new Date(nowStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      completedAtSpan.textContent = `Completed on ${dateLabel}`;
+    } else {
+      completedAtSpan.textContent = '';
+    }
+
+    if (currentEvent && currentEvent.id) {
+      const auth = await getAuth();
+      const userId = auth?.localId || '';
+      await toggleFixedEventComplete(userId, currentEvent.id, isCompleted);
+      currentEvent.isCompleted = isCompleted;
+      currentEvent.completedAt = isCompleted ? new Date().toISOString() : null;
+    }
   });
 
   // Type pills selection listeners
@@ -219,6 +273,15 @@ function selectType(type) {
       btn.style.color = config.color;
     }
   });
+
+  const completionGroup = modalOverlay.querySelector('#fe-completion-group');
+  if (completionGroup) {
+    if (type === 'deadline' || type === 'reminder') {
+      completionGroup.style.display = 'flex';
+    } else {
+      completionGroup.style.display = 'none';
+    }
+  }
 }
 
 function hide() {
@@ -260,8 +323,11 @@ async function handleSave() {
       endDateInput.focus();
       return;
     }
+    const errorDiv = modalOverlay.querySelector('#fe-enddate-error');
     if (endDate < date) {
-      showAlert('End Date cannot be before the Start Date.', 'Invalid Date Range');
+      errorDiv.textContent = 'End Date cannot be before the Start Date.';
+      errorDiv.style.display = 'block';
+      endDateInput.style.borderColor = '#ef4444';
       endDateInput.focus();
       return;
     }
@@ -273,6 +339,10 @@ async function handleSave() {
   const category = categorySelect.value || 'Other';
   const note = noteTextarea.value.trim();
 
+  const completedCheckbox = modalOverlay.querySelector('#fe-completed');
+  const isCompleted = (selectedType === 'appointment') ? false : completedCheckbox.checked;
+  const completedAt = isCompleted ? (currentEvent?.completedAt || new Date().toISOString()) : null;
+
   const auth = await getAuth();
   const userId = auth?.localId || '';
 
@@ -280,11 +350,15 @@ async function handleSave() {
     title,
     type: selectedType,
     date,
-    endDate,
+    endDate: multidayCheckbox.checked ? endDate : null,
+    isMultiDay: multidayCheckbox.checked,
+    allDay: isAllDay,
     time,
     endTime,
     category,
-    note
+    note,
+    isCompleted,
+    completedAt
   };
 
   try {
@@ -354,16 +428,26 @@ export async function openFixedEventModal(eventOrPrefill = null, onSave = null, 
     `<option value="${escHtml(cat)}">${escHtml(cat)}</option>`
   ).join('');
 
+  const completedCheckbox = modalOverlay.querySelector('#fe-completed');
+  const completedAtSpan = modalOverlay.querySelector('#fe-completed-at');
+  const completionGroup = modalOverlay.querySelector('#fe-completion-group');
+  const enddateError = modalOverlay.querySelector('#fe-enddate-error');
+
+  // Clear errors
+  enddateError.textContent = '';
+  enddateError.style.display = 'none';
+  endDateInput.style.borderColor = '';
+
   if (currentEvent && currentEvent.id) {
     modalTitle.textContent = 'Edit Fixed Event';
     titleInput.value = currentEvent.title || '';
     dateInput.value = currentEvent.date || '';
     
-    const hasEndDate = currentEvent.endDate && currentEvent.endDate !== currentEvent.date;
+    const hasEndDate = !!currentEvent.isMultiDay || (currentEvent.endDate && currentEvent.endDate !== currentEvent.date);
     multidayCheckbox.checked = hasEndDate;
     endDateInput.value = currentEvent.endDate || currentEvent.date || '';
 
-    const isAllDay = !currentEvent.time;
+    const isAllDay = currentEvent.allDay !== undefined ? !!currentEvent.allDay : !currentEvent.time;
     allDayCheckbox.checked = isAllDay;
     timeInput.value = currentEvent.time || '';
     endTimeInput.value = currentEvent.endTime || '';
@@ -371,6 +455,22 @@ export async function openFixedEventModal(eventOrPrefill = null, onSave = null, 
     noteTextarea.value = currentEvent.note || '';
     
     selectType(currentEvent.type || 'reminder');
+
+    if (currentEvent.type === 'deadline' || currentEvent.type === 'reminder') {
+      completionGroup.style.display = 'flex';
+      completedCheckbox.checked = !!currentEvent.isCompleted;
+      if (currentEvent.isCompleted && currentEvent.completedAt) {
+        const completedDate = new Date(currentEvent.completedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        completedAtSpan.textContent = `Completed on ${completedDate}`;
+      } else {
+        completedAtSpan.textContent = '';
+      }
+    } else {
+      completionGroup.style.display = 'none';
+      completedCheckbox.checked = false;
+      completedAtSpan.textContent = '';
+    }
+
     deleteBtn.style.display = 'flex';
   } else {
     modalTitle.textContent = 'New Fixed Event';
@@ -389,6 +489,11 @@ export async function openFixedEventModal(eventOrPrefill = null, onSave = null, 
     noteTextarea.value = '';
     
     selectType('reminder');
+
+    completionGroup.style.display = 'flex';
+    completedCheckbox.checked = false;
+    completedAtSpan.textContent = '';
+
     deleteBtn.style.display = 'none';
   }
 

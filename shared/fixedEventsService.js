@@ -21,12 +21,17 @@ export async function addFixedEvent(userId, data) {
     title: data.title || '',
     type: data.type || 'reminder',
     date: data.date || '',
-    endDate: data.endDate || data.date || '',
+    endDate: data.isMultiDay ? (data.endDate || data.date) : null,
+    isMultiDay: !!data.isMultiDay,
+    allDay: data.allDay !== undefined ? !!data.allDay : true,
     time: data.time || null,
     endTime: data.endTime || null,
     category: data.category || 'Other',
     note: data.note || '',
-    createdAt: data.createdAt || new Date().toISOString()
+    isCompleted: !!data.isCompleted,
+    completedAt: data.completedAt || null,
+    createdAt: data.createdAt || new Date().toISOString(),
+    updatedAt: data.updatedAt || new Date().toISOString()
   };
 
   // 1. Update local storage
@@ -73,9 +78,8 @@ export async function updateFixedEvent(userId, eventId, data) {
   const idx = localEvents.findIndex(e => e.id === eventId);
   if (idx !== -1) {
     const updatedData = { ...data };
-    if (!updatedData.endDate) {
-      updatedData.endDate = updatedData.date || localEvents[idx].date;
-    }
+    updatedData.endDate = updatedData.isMultiDay ? (updatedData.endDate || updatedData.date || localEvents[idx].date) : null;
+    updatedData.updatedAt = new Date().toISOString();
     localEvents[idx] = { ...localEvents[idx], ...updatedData };
     await set('fixed_events', localEvents);
   }
@@ -103,6 +107,52 @@ export async function updateFixedEvent(userId, eventId, data) {
         }
       } catch (err) {
         console.error('[fixedEventsService] Firestore update error:', err);
+      }
+    }
+  }
+}
+
+/**
+ * Toggle the completion status of a fixed event.
+ * @param {string} userId
+ * @param {string} eventId
+ * @param {boolean} isCompleted
+ * @returns {Promise<void>}
+ */
+export async function toggleFixedEventComplete(userId, eventId, isCompleted) {
+  // 1. Update local storage
+  const localEvents = (await get('fixed_events')) || [];
+  const idx = localEvents.findIndex(e => e.id === eventId);
+  if (idx !== -1) {
+    localEvents[idx].isCompleted = isCompleted;
+    localEvents[idx].completedAt = isCompleted ? new Date().toISOString() : null;
+    localEvents[idx].updatedAt = new Date().toISOString();
+    await set('fixed_events', localEvents);
+  }
+
+  // 2. Write to Firestore if authenticated
+  if (userId) {
+    const auth = await getAuth();
+    if (auth) {
+      try {
+        const url = `${FIRESTORE_REST_BASE}/users/${userId}/fixed_events/${eventId}`;
+        const updatedEvent = localEvents.find(e => e.id === eventId);
+        if (updatedEvent) {
+          const fields = jsToFirestore(updatedEvent);
+          const res = await fetch(url, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${auth.idToken}`
+            },
+            body: JSON.stringify(fields)
+          });
+          if (!res.ok) {
+            console.warn('[fixedEventsService] Firestore toggle failed:', await res.text());
+          }
+        }
+      } catch (err) {
+        console.error('[fixedEventsService] Firestore toggle error:', err);
       }
     }
   }

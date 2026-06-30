@@ -1512,6 +1512,88 @@
   padding-left: 10px;
 }
 
+/* Completed fixed events */
+.fixed-event-chip.completed,
+.month-event-pill.completed,
+.upcoming-event-item.completed,
+.month-sidebar-event-item.completed,
+.fixed-event-bar.completed {
+  text-decoration: line-through;
+  opacity: 0.6;
+  filter: saturate(0.6);
+}
+
+/* Month view mid-range dots (outlined/lighter) */
+.month-event-pill.mid-range {
+  background-color: transparent !important;
+  border: 1px solid currentColor !important;
+  font-weight: normal;
+}
+
+/* Week View multi-day container & bars */
+.week-multi-day-container {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px 0;
+  padding: 8px 0;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  min-width: 700px;
+  box-sizing: border-box;
+}
+.week-multi-day-container.hidden {
+  display: none;
+}
+
+.fixed-event-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  border: 1.5px solid transparent;
+  margin: 2px 0;
+  height: 24px;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fixed-event-bar:hover {
+  transform: translateY(-0.5px);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.fixed-event-bar.deadline {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+.fixed-event-bar.deadline:hover {
+  background-color: #fecaca;
+}
+
+.fixed-event-bar.appointment {
+  background-color: #dbeafe;
+  color: #3b82f6;
+  border-color: #93c5fd;
+}
+.fixed-event-bar.appointment:hover {
+  background-color: #bfdbfe;
+}
+
+.fixed-event-bar.reminder {
+  background-color: #ffedd5;
+  color: #b45309;
+  border-color: #fdba74;
+}
+.fixed-event-bar.reminder:hover {
+  background-color: #fed7aa;
+}
+
 
 
 

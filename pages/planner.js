@@ -23,7 +23,8 @@ import { getSriLankanHoliday } from '../shared/holidays.js';
 import {
   getFixedEventsForMonth,
   getFixedEventsForDate,
-  getUpcomingFixedEvents
+  getUpcomingFixedEvents,
+  toggleFixedEventComplete
 } from '../shared/fixedEventsService.js';
 import { openFixedEventModal } from '../shared/FixedEventModal.js';
 
@@ -249,7 +250,8 @@ async function renderDayFixedEvents() {
 
   events.forEach(event => {
     const chip = document.createElement('div');
-    chip.className = `fixed-event-chip ${event.type}`;
+    const completedClass = event.isCompleted ? ' completed' : '';
+    chip.className = `fixed-event-chip ${event.type}${completedClass}`;
     
     let icon = '🔔';
     if (event.type === 'deadline') icon = '⏰';
@@ -286,7 +288,8 @@ async function renderDaySidebarFixedEvents() {
   listContainer.innerHTML = '';
   events.forEach(event => {
     const item = document.createElement('div');
-    item.className = 'upcoming-event-item';
+    const completedClass = event.isCompleted ? ' completed' : '';
+    item.className = `upcoming-event-item${completedClass}`;
     item.style.cssText = 'display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--color-bg); border-left: 3px solid; cursor: pointer; transition: background 150ms;';
     
     if (event.type === 'deadline') {
@@ -305,26 +308,51 @@ async function renderDaySidebarFixedEvents() {
     else if (event.type === 'appointment') icon = '📅';
 
     let dateLabel = '';
-    if (event.date === currentDate) {
-      dateLabel = 'Today';
-    } else if (event.date === dateKeyFrom(currentDate, 1)) {
-      dateLabel = 'Tomorrow';
-    } else if (event.date === dateKeyFrom(currentDate, 2)) {
-      dateLabel = 'In 2 days';
+    const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
+    if (isMulti) {
+      const startObj = new Date(event.date + 'T12:00:00');
+      const startFormatted = startObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const endObj = new Date(event.endDate + 'T12:00:00');
+      const endFormatted = endObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      dateLabel = `${startFormatted} – ${endFormatted}`;
     } else {
-      dateLabel = fmtShort(event.date);
+      if (event.date === currentDate) {
+        dateLabel = 'Today';
+      } else if (event.date === dateKeyFrom(currentDate, 1)) {
+        dateLabel = 'Tomorrow';
+      } else if (event.date === dateKeyFrom(currentDate, 2)) {
+        dateLabel = 'In 2 days';
+      } else {
+        dateLabel = fmtShort(event.date);
+      }
     }
 
     const timeLabel = event.time ? formatTimeStr(event.time) : '';
     const dateAndTime = timeLabel ? `${dateLabel} · ${timeLabel}` : dateLabel;
 
+    let checkboxHtml = '';
+    if (event.type === 'deadline' || event.type === 'reminder') {
+      checkboxHtml = `<input type="checkbox" class="event-complete-checkbox" ${event.isCompleted ? 'checked' : ''} style="margin: 0; cursor: pointer; accent-color: var(--color-accent); flex-shrink: 0;" />`;
+    }
+
     item.innerHTML = `
       <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; flex: 1;">
+        ${checkboxHtml}
         <span style="font-size: 14px; flex-shrink: 0;">${icon}</span>
         <span style="font-size: 13px; font-weight: 500; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escHtml(event.title)}</span>
       </div>
       <span style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0;">${dateAndTime}</span>
     `;
+
+    const chk = item.querySelector('.event-complete-checkbox');
+    if (chk) {
+      chk.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const isCompleted = chk.checked;
+        await toggleFixedEventComplete(userId, event.id, isCompleted);
+        await refreshActiveTab();
+      });
+    }
 
     item.addEventListener('click', () => {
       openFixedEventModal(event, async () => {
@@ -439,7 +467,8 @@ async function renderMonthSidebarFixedEvents() {
 
   events.forEach(event => {
     const item = document.createElement('div');
-    item.className = 'month-sidebar-event-item';
+    const completedClass = event.isCompleted ? ' completed' : '';
+    item.className = `month-sidebar-event-item${completedClass}`;
     item.style.cssText = 'display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 6px; background: var(--color-bg); border-left: 3px solid; cursor: pointer; transition: background 150ms; margin-bottom: 6px;';
     
     if (event.type === 'deadline') {
@@ -461,7 +490,8 @@ async function renderMonthSidebarFixedEvents() {
     const startFormatted = startObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     
     let dateStr = startFormatted;
-    if (event.endDate && event.endDate !== event.date) {
+    const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
+    if (isMulti && event.endDate) {
       const endObj = new Date(event.endDate + 'T12:00:00');
       const endFormatted = endObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       dateStr = `${startFormatted} – ${endFormatted}`;
@@ -469,8 +499,14 @@ async function renderMonthSidebarFixedEvents() {
 
     const timeStr = event.time ? `, ${formatTimeStr(event.time)}` : '';
 
+    let checkboxHtml = '';
+    if (event.type === 'deadline' || event.type === 'reminder') {
+      checkboxHtml = `<input type="checkbox" class="event-complete-checkbox" ${event.isCompleted ? 'checked' : ''} style="margin: 0; margin-top: 2px; cursor: pointer; accent-color: var(--color-accent); flex-shrink: 0;" />`;
+    }
+
     item.innerHTML = `
       <div style="display: flex; gap: 8px; align-items: flex-start; overflow: hidden; flex: 1;">
+        ${checkboxHtml}
         <span style="font-size: 14px; flex-shrink: 0; margin-top: 1px;">${icon}</span>
         <div style="display: flex; flex-direction: column; overflow: hidden;">
           <span style="font-size: 13px; font-weight: 500; color: var(--color-text); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escHtml(event.title)}</span>
@@ -478,6 +514,16 @@ async function renderMonthSidebarFixedEvents() {
         </div>
       </div>
     `;
+
+    const chk = item.querySelector('.event-complete-checkbox');
+    if (chk) {
+      chk.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const isCompleted = chk.checked;
+        await toggleFixedEventComplete(userId, event.id, isCompleted);
+        await refreshActiveTab();
+      });
+    }
 
     item.addEventListener('click', () => {
       openFixedEventModal(event, async () => {
@@ -1476,6 +1522,108 @@ async function renderWeekTab() {
 
   weekGrid.innerHTML = '';
 
+  const multiDayContainer = document.getElementById('week-multi-day-container');
+  if (multiDayContainer) {
+    multiDayContainer.innerHTML = '';
+    multiDayContainer.classList.add('hidden');
+    
+    // Gather all unique events across the week
+    const allWeekEvents = [];
+    const seenIds = new Set();
+    fixedEventsByDay.forEach(dayEvents => {
+      dayEvents.forEach(event => {
+        if (!seenIds.has(event.id)) {
+          seenIds.add(event.id);
+          allWeekEvents.push(event);
+        }
+      });
+    });
+    
+    // Filter only multi-day events
+    const multiDayEvents = allWeekEvents.filter(event => {
+      return event.isMultiDay || (event.endDate && event.endDate !== event.date);
+    });
+    
+    if (multiDayEvents.length > 0) {
+      multiDayContainer.classList.remove('hidden');
+      
+      // Sort multi-day events by start date and end date
+      multiDayEvents.sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        return (a.endDate || a.date).localeCompare(b.endDate || b.date);
+      });
+      
+      const rowOccupancy = []; // Array of arrays of 7 booleans
+      
+      multiDayEvents.forEach(event => {
+        const startIdx = dates.indexOf(event.date);
+        const endIdx = dates.indexOf(event.endDate);
+        
+        const startCol = startIdx !== -1 ? startIdx + 1 : 1;
+        const endCol = endIdx !== -1 ? endIdx + 2 : 8;
+        
+        let assignedRow = 0;
+        for (let r = 0; r < rowOccupancy.length; r++) {
+          let fits = true;
+          for (let c = startCol - 1; c < endCol - 1; c++) {
+            if (rowOccupancy[r][c]) {
+              fits = false;
+              break;
+            }
+          }
+          if (fits) {
+            assignedRow = r;
+            break;
+          }
+        }
+        
+        if (assignedRow === rowOccupancy.length) {
+          rowOccupancy.push(new Array(7).fill(false));
+        }
+        for (let c = startCol - 1; c < endCol - 1; c++) {
+          rowOccupancy[assignedRow][c] = true;
+        }
+        
+        const bar = document.createElement('div');
+        const completedClass = event.isCompleted ? ' completed' : '';
+        bar.className = `fixed-event-bar ${event.type}${completedClass}`;
+        
+        bar.style.gridColumnStart = startCol;
+        bar.style.gridColumnEnd = endCol;
+        bar.style.gridRowStart = assignedRow + 1;
+        
+        const leftRound = (startIdx !== -1);
+        const rightRound = (endIdx !== -1);
+        
+        bar.style.borderTopLeftRadius = leftRound ? '4px' : '0';
+        bar.style.borderBottomLeftRadius = leftRound ? '4px' : '0';
+        bar.style.borderTopRightRadius = rightRound ? '4px' : '0';
+        bar.style.borderBottomRightRadius = rightRound ? '4px' : '0';
+        
+        bar.style.marginLeft = leftRound ? '4px' : '0';
+        bar.style.marginRight = rightRound ? '4px' : '0';
+        
+        let icon = '🔔';
+        if (event.type === 'deadline') icon = '⏰';
+        else if (event.type === 'appointment') icon = '📅';
+        
+        const timeStr = event.time ? formatTimeStr(event.time) : 'All Day';
+        bar.innerHTML = `<span>${icon}</span> <span style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escHtml(event.title)}</span> <span style="opacity: 0.6; margin-left: 2px; font-size: 9px; white-space: nowrap;">· ${timeStr}</span>`;
+        
+        bar.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openFixedEventModal(event, async () => {
+            await refreshActiveTab();
+          }, async () => {
+            await refreshActiveTab();
+          });
+        });
+        
+        multiDayContainer.appendChild(bar);
+      });
+    }
+  }
+
   const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   dates.forEach((date, i) => {
@@ -1525,10 +1673,14 @@ async function renderWeekTab() {
 
     // Render week fixed events
     const feCell = col.querySelector(`#wfe-${date}`);
-    const dayFixedEvents = fixedEventsByDay[i] || [];
+    const dayFixedEvents = (fixedEventsByDay[i] || []).filter(event => {
+      const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
+      return !isMulti;
+    });
     dayFixedEvents.forEach(event => {
       const chip = document.createElement('div');
-      chip.className = `fixed-event-chip ${event.type}`;
+      const completedClass = event.isCompleted ? ' completed' : '';
+      chip.className = `fixed-event-chip ${event.type}${completedClass}`;
       chip.style.cssText = 'padding: 2px 6px; font-size: 10px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; border: 1.5px solid; cursor: pointer; max-width: 100%; box-sizing: border-box; overflow: hidden; margin-bottom: 2px;';
       
       let icon = '🔔';
@@ -2057,8 +2209,14 @@ async function renderMonthTab() {
         else if (event.type === 'appointment') icon = '📅';
 
         const timeLabel = event.time ? ` (${formatTimeStr(event.time)})` : '';
+        
+        const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
+        const isMidRange = isMulti && date !== event.endDate;
+        const midRangeClass = isMidRange ? ' mid-range' : '';
+        const completedClass = event.isCompleted ? ' completed' : '';
+
         return `
-          <div class="month-event-pill ${event.type}" 
+          <div class="month-event-pill ${event.type}${midRangeClass}${completedClass}" 
                data-event-json="${escHtml(JSON.stringify(event))}"
                title="${escHtml(event.title)}${timeLabel}">
             <span>${icon}</span>

@@ -1057,11 +1057,16 @@ export function firestoreToJs(doc) {
     type: f.type?.stringValue || 'reminder',
     date: f.date?.stringValue || '',
     endDate: f.endDate?.nullValue !== undefined ? null : (f.endDate?.stringValue || null),
+    isMultiDay: f.isMultiDay?.booleanValue || false,
+    allDay: f.allDay?.booleanValue !== undefined ? f.allDay.booleanValue : true,
     time: f.time?.nullValue !== undefined ? null : (f.time?.stringValue || null),
     endTime: f.endTime?.nullValue !== undefined ? null : (f.endTime?.stringValue || null),
     category: f.category?.stringValue || 'Other',
     note: f.note?.stringValue || '',
-    createdAt: f.createdAt?.timestampValue || new Date().toISOString()
+    isCompleted: f.isCompleted?.booleanValue || false,
+    completedAt: f.completedAt?.nullValue !== undefined ? null : (f.completedAt?.timestampValue || null),
+    createdAt: f.createdAt?.timestampValue || new Date().toISOString(),
+    updatedAt: f.updatedAt?.timestampValue || f.createdAt?.timestampValue || new Date().toISOString()
   };
 }
 
@@ -1084,6 +1089,9 @@ export function jsToFirestore(data) {
     fields.endDate = { stringValue: data.endDate };
   }
   
+  fields.isMultiDay = { booleanValue: !!data.isMultiDay };
+  fields.allDay = { booleanValue: data.allDay !== undefined ? !!data.allDay : true };
+  
   if (data.time === null || data.time === undefined) {
     fields.time = { nullValue: null };
   } else {
@@ -1098,9 +1106,19 @@ export function jsToFirestore(data) {
   
   fields.category = { stringValue: data.category || 'Other' };
   fields.note = { stringValue: data.note || '' };
+  fields.isCompleted = { booleanValue: !!data.isCompleted };
+  
+  if (data.completedAt === null || data.completedAt === undefined) {
+    fields.completedAt = { nullValue: null };
+  } else {
+    fields.completedAt = { timestampValue: data.completedAt };
+  }
   
   const createdAtVal = data.createdAt || new Date().toISOString();
   fields.createdAt = { timestampValue: createdAtVal };
+  
+  const updatedAtVal = data.updatedAt || new Date().toISOString();
+  fields.updatedAt = { timestampValue: updatedAtVal };
   
   return { fields };
 }
