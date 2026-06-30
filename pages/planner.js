@@ -13,16 +13,40 @@ import {
   snapHour,
   getCustomCategories, addCustomCategory, deleteCustomCategory, renameCustomCategory,
   initAutoSync,
+  getAuth,
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
 import { showConfirm, showAlert } from '../shared/dialog.js';
 import { getSriLankanHoliday } from '../shared/holidays.js';
 
+import {
+  getFixedEventsForMonth,
+  getFixedEventsForDate,
+  getUpcomingFixedEvents,
+  toggleFixedEventComplete
+} from '../shared/fixedEventsService.js';
+import { openFixedEventModal } from '../shared/FixedEventModal.js';
+
 let showSlHolidays = false;
 
 // ─── Date helpers ──────────────────────────────────────────────────────────────
 function isoDate(d) { return d.toISOString().slice(0, 10); }
+
+function dateKeyFrom(baseDateStr, offset) {
+  const d = new Date(baseDateStr + 'T12:00:00');
+  d.setDate(d.getDate() + offset);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatTimeStr(time24) {
+  if (!time24) return '';
+  const [hStr, mStr] = time24.split(':');
+  const h = parseInt(hStr, 10);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const displayH = h % 12 === 0 ? 12 : h % 12;
+  return `${displayH}:${mStr} ${ampm}`;
+}
 
 function getMondayOf(dateStr) {
   const d = new Date(dateStr + 'T12:00:00');
@@ -202,6 +226,315 @@ async function onDayChanged() {
   if (timeboardInstance) timeboardInstance.refresh(currentDate);
   await renderPriorityList();
   await loadNotes();
+  await renderDayFixedEvents();
+  await renderDaySidebarFixedEvents();
+  await renderCountdownBanners();
+}
+
+async function renderDayFixedEvents() {
+  const container = document.getElementById('day-fixed-events-banner-zone');
+  if (!container) return;
+
+  const auth = await getAuth();
+  const userId = auth?.localId || '';
+  const events = await getFixedEventsForDate(userId, currentDate);
+
+  if (events.length === 0) {
+    container.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+
+  container.classList.remove('hidden');
+  container.innerHTML = '';
+
+  events.forEach(event => {
+    const chip = document.createElement('div');
+    const completedClass = event.isCompleted ? ' completed' : '';
+    chip.className = `fixed-event-chip ${event.type}${completedClass}`;
+    
+    let icon = '🔔';
+    if (event.type === 'deadline') icon = '⏰';
+    else if (event.type === 'appointment') icon = '📅';
+
+    const timeStr = event.time ? formatTimeStr(event.time) : 'All Day';
+    chip.innerHTML = `<span>${icon}</span> <span class="font-medium">${escHtml(event.title)}</span> <span style="opacity: 0.6; margin-left: 2px;">· ${timeStr}</span>`;
+    
+    chip.addEventListener('click', () => {
+      openFixedEventModal(event, async () => {
+        await refreshActiveTab();
+      }, async () => {
+        await refreshActiveTab();
+      });
+    });
+    
+    container.appendChild(chip);
+  });
+}
+
+async function renderDaySidebarFixedEvents() {
+  const listContainer = document.getElementById('upcoming-fixed-events-list');
+  if (!listContainer) return;
+
+  const auth = await getAuth();
+  const userId = auth?.localId || '';
+  const events = await getUpcomingFixedEvents(userId, currentDate, 3);
+
+  if (events.length === 0) {
+    listContainer.innerHTML = `<div style="text-align: center; font-size: 12px; color: var(--color-text-muted); padding: 8px 0;">No upcoming events.</div>`;
+    return;
+  }
+
+  listContainer.innerHTML = '';
+  events.forEach(event => {
+    const item = document.createElement('div');
+    const completedClass = event.isCompleted ? ' completed' : '';
+    item.className = `upcoming-event-item${completedClass}`;
+    item.style.cssText = 'display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--color-bg); border-left: 3px solid; cursor: pointer; transition: background 150ms;';
+    
+    if (event.type === 'deadline') {
+      item.style.borderLeftColor = '#ef4444';
+    } else if (event.type === 'appointment') {
+      item.style.borderLeftColor = '#3b82f6';
+    } else {
+      item.style.borderLeftColor = '#f59e0b';
+    }
+    
+    item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-border)'; });
+    item.addEventListener('mouseleave', () => { item.style.background = 'var(--color-bg)'; });
+
+    let icon = '🔔';
+    if (event.type === 'deadline') icon = '⏰';
+    else if (event.type === 'appointment') icon = '📅';
+
+    let dateLabel = '';
+    const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
+    if (isMulti) {
+      const startObj = new Date(event.date + 'T12:00:00');
+      const startFormatted = startObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const endObj = new Date(event.endDate + 'T12:00:00');
+      const endFormatted = endObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      dateLabel = `${startFormatted} – ${endFormatted}`;
+    } else {
+      if (event.date === currentDate) {
+        dateLabel = 'Today';
+      } else if (event.date === dateKeyFrom(currentDate, 1)) {
+        dateLabel = 'Tomorrow';
+      } else if (event.date === dateKeyFrom(currentDate, 2)) {
+        dateLabel = 'In 2 days';
+      } else {
+        dateLabel = fmtShort(event.date);
+      }
+    }
+
+    const timeLabel = event.time ? formatTimeStr(event.time) : '';
+    const dateAndTime = timeLabel ? `${dateLabel} · ${timeLabel}` : dateLabel;
+
+    let checkboxHtml = '';
+    if (event.type === 'deadline' || event.type === 'reminder') {
+      checkboxHtml = `<input type="checkbox" class="event-complete-checkbox" ${event.isCompleted ? 'checked' : ''} style="margin: 0; cursor: pointer; accent-color: var(--color-accent); flex-shrink: 0;" />`;
+    }
+
+    item.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; flex: 1;">
+        ${checkboxHtml}
+        <span style="font-size: 14px; flex-shrink: 0;">${icon}</span>
+        <span style="font-size: 13px; font-weight: 500; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escHtml(event.title)}</span>
+      </div>
+      <span style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0;">${dateAndTime}</span>
+    `;
+
+    const chk = item.querySelector('.event-complete-checkbox');
+    if (chk) {
+      chk.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const isCompleted = chk.checked;
+        await toggleFixedEventComplete(userId, event.id, isCompleted);
+        await refreshActiveTab();
+      });
+    }
+
+    item.addEventListener('click', () => {
+      openFixedEventModal(event, async () => {
+        await refreshActiveTab();
+      }, async () => {
+        await refreshActiveTab();
+      });
+    });
+
+    listContainer.appendChild(item);
+  });
+}
+
+async function renderCountdownBanners() {
+  const container = document.getElementById('day-countdown-banners-container');
+  if (!container) return;
+
+  const auth = await getAuth();
+  const userId = auth?.localId || '';
+  const events = await getUpcomingFixedEvents(userId, currentDate, 3);
+  const filteredEvents = events.filter(e => e.type === 'deadline' || e.type === 'appointment');
+
+  container.innerHTML = '';
+
+  if (filteredEvents.length === 0) {
+    return;
+  }
+
+  filteredEvents.forEach(event => {
+    const sessionKey = `dismissed_event_${event.id}_${currentDate}`;
+    if (sessionStorage.getItem(sessionKey)) {
+      return;
+    }
+
+    const banner = document.createElement('div');
+    banner.className = `countdown-banner ${event.type}`;
+    banner.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: 6px; background: var(--color-surface); border: 1px solid var(--color-border); border-left-width: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.02); font-size: 13px; font-weight: 500; margin-bottom: 6px;';
+    
+    if (event.type === 'deadline') {
+      banner.style.borderLeftColor = '#ef4444';
+    } else if (event.type === 'appointment') {
+      banner.style.borderLeftColor = '#3b82f6';
+    }
+
+    let icon = event.type === 'deadline' ? '⏰' : '📅';
+    
+    let relText = '';
+    if (event.date === currentDate) {
+      relText = 'today';
+    } else if (event.date === dateKeyFrom(currentDate, 1)) {
+      relText = 'tomorrow';
+    } else if (event.date === dateKeyFrom(currentDate, 2)) {
+      relText = 'in 2 days';
+    }
+
+    const weekdayStr = new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' });
+    const monthAndDay = fmtShort(event.date);
+    const timeLabel = event.time ? ` · ${formatTimeStr(event.time)}` : '';
+    const dateDetails = `(${weekdayStr}, ${monthAndDay}${timeLabel})`;
+
+    const typeCapitalized = event.type.charAt(0).toUpperCase() + event.type.slice(1);
+    
+    banner.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span>${icon}</span>
+        <span>
+          <strong style="color: var(--color-text);">${typeCapitalized} ${relText}</strong> — 
+          <span class="countdown-title" style="color: var(--color-text); cursor: pointer; text-decoration: underline;">${escHtml(event.title)}</span> 
+          <span style="color: var(--color-text-muted); font-size: 12px; margin-left: 4px;">${dateDetails}</span>
+        </span>
+      </div>
+      <button class="btn-close-banner" style="background: none; border: none; cursor: pointer; color: var(--color-text-muted); font-size: 14px; padding: 4px; display: flex; align-items: center; justify-content: center; border-radius: 4px;" title="Dismiss">✕</button>
+    `;
+
+    banner.querySelector('.btn-close-banner').addEventListener('click', () => {
+      sessionStorage.setItem(sessionKey, 'true');
+      banner.remove();
+    });
+
+    banner.querySelector('.countdown-title').addEventListener('click', () => {
+      openFixedEventModal(event, async () => {
+        await refreshActiveTab();
+      }, async () => {
+        await refreshActiveTab();
+      });
+    });
+
+    container.appendChild(banner);
+  });
+}
+
+async function renderMonthSidebarFixedEvents() {
+  const listContainer = document.getElementById('month-fixed-events-list');
+  if (!listContainer) return;
+
+  const auth = await getAuth();
+  const userId = auth?.localId || '';
+  const events = await getFixedEventsForMonth(userId, currentYear, currentMonth);
+
+  events.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    if (!a.time) return -1;
+    if (!b.time) return 1;
+    return a.time.localeCompare(b.time);
+  });
+
+  listContainer.innerHTML = '';
+  if (events.length === 0) {
+    listContainer.innerHTML = `<div style="text-align: center; color: var(--color-text-muted); font-size: 12px; padding: 20px 0;">No fixed events.</div>`;
+    return;
+  }
+
+  events.forEach(event => {
+    const item = document.createElement('div');
+    const completedClass = event.isCompleted ? ' completed' : '';
+    item.className = `month-sidebar-event-item${completedClass}`;
+    item.style.cssText = 'display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 6px; background: var(--color-bg); border-left: 3px solid; cursor: pointer; transition: background 150ms; margin-bottom: 6px;';
+    
+    if (event.type === 'deadline') {
+      item.style.borderLeftColor = '#ef4444';
+    } else if (event.type === 'appointment') {
+      item.style.borderLeftColor = '#3b82f6';
+    } else {
+      item.style.borderLeftColor = '#f59e0b';
+    }
+
+    item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-border)'; });
+    item.addEventListener('mouseleave', () => { item.style.background = 'var(--color-bg)'; });
+
+    let icon = '🔔';
+    if (event.type === 'deadline') icon = '⏰';
+    else if (event.type === 'appointment') icon = '📅';
+
+    const startObj = new Date(event.date + 'T12:00:00');
+    const startFormatted = startObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    
+    let dateStr = startFormatted;
+    const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
+    if (isMulti && event.endDate) {
+      const endObj = new Date(event.endDate + 'T12:00:00');
+      const endFormatted = endObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      dateStr = `${startFormatted} – ${endFormatted}`;
+    }
+
+    const timeStr = event.time ? `, ${formatTimeStr(event.time)}` : '';
+
+    let checkboxHtml = '';
+    if (event.type === 'deadline' || event.type === 'reminder') {
+      checkboxHtml = `<input type="checkbox" class="event-complete-checkbox" ${event.isCompleted ? 'checked' : ''} style="margin: 0; margin-top: 2px; cursor: pointer; accent-color: var(--color-accent); flex-shrink: 0;" />`;
+    }
+
+    item.innerHTML = `
+      <div style="display: flex; gap: 8px; align-items: flex-start; overflow: hidden; flex: 1;">
+        ${checkboxHtml}
+        <span style="font-size: 14px; flex-shrink: 0; margin-top: 1px;">${icon}</span>
+        <div style="display: flex; flex-direction: column; overflow: hidden;">
+          <span style="font-size: 13px; font-weight: 500; color: var(--color-text); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escHtml(event.title)}</span>
+          <span style="font-size: 11px; color: var(--color-text-muted); margin-top: 2px;">${dateStr}${timeStr}</span>
+        </div>
+      </div>
+    `;
+
+    const chk = item.querySelector('.event-complete-checkbox');
+    if (chk) {
+      chk.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const isCompleted = chk.checked;
+        await toggleFixedEventComplete(userId, event.id, isCompleted);
+        await refreshActiveTab();
+      });
+    }
+
+    item.addEventListener('click', () => {
+      openFixedEventModal(event, async () => {
+        await refreshActiveTab();
+      }, async () => {
+        await refreshActiveTab();
+      });
+    });
+
+    listContainer.appendChild(item);
+  });
 }
 
 // Category pills
@@ -907,6 +1240,9 @@ async function saveTask() {
 async function refreshActiveTab() {
   if (activeTab === 'day') {
     await renderPriorityList();
+    await renderDayFixedEvents();
+    await renderDaySidebarFixedEvents();
+    await renderCountdownBanners();
   } else if (activeTab === 'week') {
     await renderWeekTab();
   } else if (activeTab === 'month') {
@@ -1159,8 +1495,14 @@ async function renderWeekTab() {
 
   weekNavTitle.textContent = `${fmtShort(dates[0])} – ${fmtShort(lastDay)}, ${new Date(dates[0] + 'T12:00:00').getFullYear()}`;
 
-  // Load tasks for all 7 days in parallel
-  const tasksByDay = await Promise.all(dates.map((d) => getTasks(d)));
+  const auth = await getAuth();
+  const userId = auth?.localId || '';
+
+  // Load tasks and fixed events for all 7 days in parallel
+  const [tasksByDay, fixedEventsByDay] = await Promise.all([
+    Promise.all(dates.map((d) => getTasks(d))),
+    Promise.all(dates.map((d) => getFixedEventsForDate(userId, d)))
+  ]);
 
   // Calculate and update weekly progress
   let totalWeeklyTasks = 0;
@@ -1179,6 +1521,108 @@ async function renderWeekTab() {
   }
 
   weekGrid.innerHTML = '';
+
+  const multiDayContainer = document.getElementById('week-multi-day-container');
+  if (multiDayContainer) {
+    multiDayContainer.innerHTML = '';
+    multiDayContainer.classList.add('hidden');
+    
+    // Gather all unique events across the week
+    const allWeekEvents = [];
+    const seenIds = new Set();
+    fixedEventsByDay.forEach(dayEvents => {
+      dayEvents.forEach(event => {
+        if (!seenIds.has(event.id)) {
+          seenIds.add(event.id);
+          allWeekEvents.push(event);
+        }
+      });
+    });
+    
+    // Filter only multi-day events
+    const multiDayEvents = allWeekEvents.filter(event => {
+      return event.isMultiDay || (event.endDate && event.endDate !== event.date);
+    });
+    
+    if (multiDayEvents.length > 0) {
+      multiDayContainer.classList.remove('hidden');
+      
+      // Sort multi-day events by start date and end date
+      multiDayEvents.sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        return (a.endDate || a.date).localeCompare(b.endDate || b.date);
+      });
+      
+      const rowOccupancy = []; // Array of arrays of 7 booleans
+      
+      multiDayEvents.forEach(event => {
+        const startIdx = dates.indexOf(event.date);
+        const endIdx = dates.indexOf(event.endDate);
+        
+        const startCol = startIdx !== -1 ? startIdx + 1 : 1;
+        const endCol = endIdx !== -1 ? endIdx + 2 : 8;
+        
+        let assignedRow = 0;
+        for (let r = 0; r < rowOccupancy.length; r++) {
+          let fits = true;
+          for (let c = startCol - 1; c < endCol - 1; c++) {
+            if (rowOccupancy[r][c]) {
+              fits = false;
+              break;
+            }
+          }
+          if (fits) {
+            assignedRow = r;
+            break;
+          }
+        }
+        
+        if (assignedRow === rowOccupancy.length) {
+          rowOccupancy.push(new Array(7).fill(false));
+        }
+        for (let c = startCol - 1; c < endCol - 1; c++) {
+          rowOccupancy[assignedRow][c] = true;
+        }
+        
+        const bar = document.createElement('div');
+        const completedClass = event.isCompleted ? ' completed' : '';
+        bar.className = `fixed-event-bar ${event.type}${completedClass}`;
+        
+        bar.style.gridColumnStart = startCol;
+        bar.style.gridColumnEnd = endCol;
+        bar.style.gridRowStart = assignedRow + 1;
+        
+        const leftRound = (startIdx !== -1);
+        const rightRound = (endIdx !== -1);
+        
+        bar.style.borderTopLeftRadius = leftRound ? '4px' : '0';
+        bar.style.borderBottomLeftRadius = leftRound ? '4px' : '0';
+        bar.style.borderTopRightRadius = rightRound ? '4px' : '0';
+        bar.style.borderBottomRightRadius = rightRound ? '4px' : '0';
+        
+        bar.style.marginLeft = leftRound ? '4px' : '0';
+        bar.style.marginRight = rightRound ? '4px' : '0';
+        
+        let icon = '🔔';
+        if (event.type === 'deadline') icon = '⏰';
+        else if (event.type === 'appointment') icon = '📅';
+        
+        const timeStr = event.time ? formatTimeStr(event.time) : 'All Day';
+        bar.innerHTML = `<span>${icon}</span> <span style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escHtml(event.title)}</span> <span style="opacity: 0.6; margin-left: 2px; font-size: 9px; white-space: nowrap;">· ${timeStr}</span>`;
+        
+        bar.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openFixedEventModal(event, async () => {
+            await refreshActiveTab();
+          }, async () => {
+            await refreshActiveTab();
+          });
+        });
+        
+        multiDayContainer.appendChild(bar);
+      });
+    }
+  }
 
   const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -1219,12 +1663,44 @@ async function renderWeekTab() {
           </div>
         ` : ''}
       </div>
+      <div class="week-fixed-events-cell" id="wfe-${date}"></div>
       <div class="week-task-list" id="wt-${date}"></div>
       <div class="week-add-row">
         <input type="text" class="week-add-input" data-date="${date}" placeholder="+ Add task…" maxlength="200" />
         <button class="week-add-btn" data-date="${date}">+</button>
       </div>
     `;
+
+    // Render week fixed events
+    const feCell = col.querySelector(`#wfe-${date}`);
+    const dayFixedEvents = (fixedEventsByDay[i] || []).filter(event => {
+      const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
+      return !isMulti;
+    });
+    dayFixedEvents.forEach(event => {
+      const chip = document.createElement('div');
+      const completedClass = event.isCompleted ? ' completed' : '';
+      chip.className = `fixed-event-chip ${event.type}${completedClass}`;
+      chip.style.cssText = 'padding: 2px 6px; font-size: 10px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; border: 1.5px solid; cursor: pointer; max-width: 100%; box-sizing: border-box; overflow: hidden; margin-bottom: 2px;';
+      
+      let icon = '🔔';
+      if (event.type === 'deadline') icon = '⏰';
+      else if (event.type === 'appointment') icon = '📅';
+
+      const timeStr = event.time ? formatTimeStr(event.time) : 'All Day';
+      chip.innerHTML = `<span>${icon}</span> <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60px;">${escHtml(event.title)}</span> <span style="opacity: 0.6; margin-left: 2px; font-size: 9px; white-space: nowrap;">· ${timeStr}</span>`;
+      
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openFixedEventModal(event, async () => {
+          await refreshActiveTab();
+        }, async () => {
+          await refreshActiveTab();
+        });
+      });
+      
+      feCell.appendChild(chip);
+    });
 
     // Click header → go to day
     col.querySelector('.week-col-header').addEventListener('click', () => {
@@ -1652,15 +2128,23 @@ async function renderMonthTab() {
     displayDates.push({ date: isoDate(new Date(currentYear, currentMonth + 1, d)), current: false });
   }
 
+  const auth = await getAuth();
+  const userId = auth?.localId || '';
+
   // Load task + block counts in parallel
   const countData = await Promise.all(
     displayDates.map(async ({ date }) => {
-      const [tasks, blocks] = await Promise.all([getTasks(date), getBlocks(date)]);
+      const [tasks, blocks, fixedEvents] = await Promise.all([
+        getTasks(date),
+        getBlocks(date),
+        getFixedEventsForDate(userId, date)
+      ]);
       const stats = getTaskCompletionStats(tasks);
       return {
         tasks: stats.total,
         done:  stats.completed,
         blocks: blocks.length,
+        fixedEvents: fixedEvents
       };
     })
   );
@@ -1692,6 +2176,7 @@ async function renderMonthTab() {
 
   // Render month sidebar goals
   await renderMonthGoals();
+  await renderMonthSidebarFixedEvents();
 
   displayDates.forEach(({ date, current }, i) => {
     const counts  = countData[i];
@@ -1712,6 +2197,46 @@ async function renderMonthTab() {
       }
     }
 
+    let fixedEventsHtml = '';
+    if (counts.fixedEvents && counts.fixedEvents.length > 0) {
+      const maxVisible = 2;
+      const visibleEvents = counts.fixedEvents.slice(0, maxVisible);
+      const remainingCount = counts.fixedEvents.length - maxVisible;
+
+      const pillsHtml = visibleEvents.map(event => {
+        let icon = '🔔';
+        if (event.type === 'deadline') icon = '⏰';
+        else if (event.type === 'appointment') icon = '📅';
+
+        const timeLabel = event.time ? ` (${formatTimeStr(event.time)})` : '';
+        
+        const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
+        const isMidRange = isMulti && date !== event.endDate;
+        const midRangeClass = isMidRange ? ' mid-range' : '';
+        const completedClass = event.isCompleted ? ' completed' : '';
+
+        return `
+          <div class="month-event-pill ${event.type}${midRangeClass}${completedClass}" 
+               data-event-json="${escHtml(JSON.stringify(event))}"
+               title="${escHtml(event.title)}${timeLabel}">
+            <span>${icon}</span>
+            <span class="month-event-pill-title">${escHtml(event.title)}</span>
+          </div>
+        `;
+      }).join('');
+
+      const remainingHtml = remainingCount > 0 
+        ? `<div class="month-event-more">+${remainingCount} more</div>` 
+        : '';
+
+      fixedEventsHtml = `
+        <div class="month-day-fixed-events-container">
+          ${pillsHtml}
+          ${remainingHtml}
+        </div>
+      `;
+    }
+
     cell.innerHTML = `
       <div class="month-day-num">${dateNum}</div>
       ${current ? `<button class="month-day-quick-add" title="Quick Add Task">+</button>` : ''}
@@ -1723,6 +2248,7 @@ async function renderMonthTab() {
         ` : ''}
         ${counts.blocks > 0 ? `<span class="month-badge month-badge-blocks">${counts.blocks} block${counts.blocks > 1 ? 's' : ''}</span>` : ''}
       </div>
+      ${fixedEventsHtml}
       ${holidayHtml}
     `;
 
@@ -1745,6 +2271,19 @@ async function renderMonthTab() {
       });
       cell.addEventListener('mouseleave', () => {
         hideTooltip();
+      });
+
+      // Bind click handlers to event pills
+      cell.querySelectorAll('.month-event-pill').forEach(pill => {
+        pill.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const eventData = JSON.parse(pill.getAttribute('data-event-json'));
+          openFixedEventModal(eventData, async () => {
+            await refreshActiveTab();
+          }, async () => {
+            await refreshActiveTab();
+          });
+        });
       });
     }
 
@@ -1781,6 +2320,7 @@ async function renderYearTab() {
 
   const themes    = await getYearlyThemes();
   const allMs     = (await get('year_milestones')) ?? {};
+  const localEvents = (await get('fixed_events')) || [];
   const yearMs    = allMs[currentYear] ?? { q1: '', q2: '', q3: '', q4: '' };
 
   for (const q of QUARTERS) {
@@ -1860,11 +2400,25 @@ async function renderYearTab() {
       monthName.textContent = MONTH_NAMES[m - 1];
       monthHeader.appendChild(monthName);
 
+      const badgesContainer = document.createElement('div');
+      badgesContainer.style.cssText = 'display: flex; align-items: center; gap: 4px;';
+      monthHeader.appendChild(badgesContainer);
+
       if (isCurrent) {
         const badge = document.createElement('span');
         badge.className = 'current-badge';
         badge.textContent = 'Current';
-        monthHeader.appendChild(badge);
+        badgesContainer.appendChild(badge);
+      }
+
+      const monthPrefix = `${currentYear}-${String(m).padStart(2, '0')}`;
+      const monthEvents = localEvents.filter(e => e.date && e.date.startsWith(monthPrefix));
+      if (monthEvents.length > 0) {
+        const feBadge = document.createElement('span');
+        feBadge.className = 'year-month-fixed-events-badge';
+        feBadge.style.cssText = 'font-size: 11px; font-weight: 600; color: var(--color-accent); background: var(--color-accent-soft); padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 2px;';
+        feBadge.innerHTML = `📌 ${monthEvents.length}`;
+        badgesContainer.appendChild(feBadge);
       }
 
       card.appendChild(monthHeader);
@@ -2188,6 +2742,40 @@ async function init() {
   await renderPriorityList();
   await loadNotes();
 
+  // Initial Fixed Events rendering
+  await renderDayFixedEvents();
+  await renderDaySidebarFixedEvents();
+  await renderCountdownBanners();
+
+  // Bind add buttons
+  const sidebarAddBtn = document.getElementById('btn-add-fixed-event-sidebar');
+  if (sidebarAddBtn) {
+    sidebarAddBtn.addEventListener('click', () => {
+      openFixedEventModal({ date: currentDate }, async () => {
+        await refreshActiveTab();
+      });
+    });
+  }
+
+  const weekAddBtn = document.getElementById('btn-add-fixed-event-week');
+  if (weekAddBtn) {
+    weekAddBtn.addEventListener('click', () => {
+      openFixedEventModal({ date: TODAY }, async () => {
+        await refreshActiveTab();
+      });
+    });
+  }
+
+  const monthAddBtn = document.getElementById('btn-add-month-fixed-event');
+  if (monthAddBtn) {
+    monthAddBtn.addEventListener('click', () => {
+      const prefillDate = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-01`;
+      openFixedEventModal({ date: prefillDate }, async () => {
+        await refreshActiveTab();
+      });
+    });
+  }
+
   // Initialize automatic synchronization
   initAutoSync();
 }
@@ -2205,7 +2793,8 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     key === 'task_categories' ||
     key === 'monthly_themes' ||
     key === 'monthly_goals' ||
-    key === 'show_sl_holidays'
+    key === 'show_sl_holidays' ||
+    key === 'fixed_events'
   );
 
   if (hasPlannerChanges) {

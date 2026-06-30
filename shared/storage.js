@@ -149,6 +149,8 @@ export async function get(key) {
   }
 }
 
+let lastFixedEventsWriteTime = 0;
+
 /**
  * Set a value in chrome.storage.local.
  * @param {string} key
@@ -158,6 +160,9 @@ export async function get(key) {
 export async function set(key, value) {
   try {
     await chrome.storage.local.set({ [key]: value });
+    if (key === 'fixed_events') {
+      lastFixedEventsWriteTime = Date.now();
+    }
     // Sync to cloud in the background (fire-and-forget)
     syncToCloud(key, value);
   } catch (err) {
@@ -1036,12 +1041,96 @@ export async function deleteFromCloud(key) {
 }
 
 /**
+ * Convert a Firestore Document REST response to a standard JS object for fixed events.
+ * @param {object} doc
+ * @returns {object}
+ */
+export function firestoreToJs(doc) {
+  const parts = doc.name.split('/');
+  const id = parts[parts.length - 1];
+  const f = doc.fields || {};
+  
+  return {
+    id,
+    userId: f.userId?.stringValue || '',
+    title: f.title?.stringValue || '',
+    type: f.type?.stringValue || 'reminder',
+    date: f.date?.stringValue || '',
+    endDate: f.endDate?.nullValue !== undefined ? null : (f.endDate?.stringValue || null),
+    isMultiDay: f.isMultiDay?.booleanValue || false,
+    allDay: f.allDay?.booleanValue !== undefined ? f.allDay.booleanValue : true,
+    time: f.time?.nullValue !== undefined ? null : (f.time?.stringValue || null),
+    endTime: f.endTime?.nullValue !== undefined ? null : (f.endTime?.stringValue || null),
+    category: f.category?.stringValue || 'Other',
+    note: f.note?.stringValue || '',
+    isCompleted: f.isCompleted?.booleanValue || false,
+    completedAt: f.completedAt?.nullValue !== undefined ? null : (f.completedAt?.timestampValue || null),
+    createdAt: f.createdAt?.timestampValue || new Date().toISOString(),
+    updatedAt: f.updatedAt?.timestampValue || f.createdAt?.timestampValue || new Date().toISOString()
+  };
+}
+
+/**
+ * Convert a standard JS object to a Firestore Document REST request body for fixed events.
+ * @param {object} data
+ * @returns {object}
+ */
+export function jsToFirestore(data) {
+  const fields = {};
+  
+  fields.userId = { stringValue: data.userId || '' };
+  fields.title = { stringValue: data.title || '' };
+  fields.type = { stringValue: data.type || 'reminder' };
+  fields.date = { stringValue: data.date || '' };
+  
+  if (data.endDate === null || data.endDate === undefined) {
+    fields.endDate = { nullValue: null };
+  } else {
+    fields.endDate = { stringValue: data.endDate };
+  }
+  
+  fields.isMultiDay = { booleanValue: !!data.isMultiDay };
+  fields.allDay = { booleanValue: data.allDay !== undefined ? !!data.allDay : true };
+  
+  if (data.time === null || data.time === undefined) {
+    fields.time = { nullValue: null };
+  } else {
+    fields.time = { stringValue: data.time };
+  }
+  
+  if (data.endTime === null || data.endTime === undefined) {
+    fields.endTime = { nullValue: null };
+  } else {
+    fields.endTime = { stringValue: data.endTime };
+  }
+  
+  fields.category = { stringValue: data.category || 'Other' };
+  fields.note = { stringValue: data.note || '' };
+  fields.isCompleted = { booleanValue: !!data.isCompleted };
+  
+  if (data.completedAt === null || data.completedAt === undefined) {
+    fields.completedAt = { nullValue: null };
+  } else {
+    fields.completedAt = { timestampValue: data.completedAt };
+  }
+  
+  const createdAtVal = data.createdAt || new Date().toISOString();
+  fields.createdAt = { timestampValue: createdAtVal };
+  
+  const updatedAtVal = data.updatedAt || new Date().toISOString();
+  fields.updatedAt = { timestampValue: updatedAtVal };
+  
+  return { fields };
+}
+
+/**
  * Pull all data documents from Firestore and populate local storage.
  */
 export async function pullLatestFromCloud() {
   const auth = await getAuth();
   if (!auth) return;
 
+  // 1. Pull user data (tasks, blocks, settings, etc.)
   try {
     const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data`;
     const res = await fetch(url, {
@@ -1049,35 +1138,60 @@ export async function pullLatestFromCloud() {
         'Authorization': `Bearer ${auth.idToken}`
       }
     });
-    if (!res.ok) {
-      // If collection doesn't exist yet, it returns 404/not found. That's fine.
-      if (res.status === 404) return;
-      console.warn('[Sync] Pull from cloud failed:', await res.text());
-      return;
-    }
-    const data = await res.json();
-    if (!data.documents) {
-      return;
-    }
-
-    for (const doc of data.documents) {
-      const parts = doc.name.split('/');
-      const key = parts[parts.length - 1];
-      const fields = doc.fields;
-      if (fields && fields.value && fields.value.stringValue) {
-        try {
-          const parsedVal = JSON.parse(fields.value.stringValue);
-          const localVal = await get(key);
-          if (JSON.stringify(localVal) !== JSON.stringify(parsedVal)) {
-            await chrome.storage.local.set({ [key]: parsedVal });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.documents) {
+        for (const doc of data.documents) {
+          const parts = doc.name.split('/');
+          const key = parts[parts.length - 1];
+          const fields = doc.fields;
+          if (fields && fields.value && fields.value.stringValue) {
+            try {
+              const parsedVal = JSON.parse(fields.value.stringValue);
+              const localVal = await get(key);
+              if (JSON.stringify(localVal) !== JSON.stringify(parsedVal)) {
+                await chrome.storage.local.set({ [key]: parsedVal });
+              }
+            } catch (e) {
+              console.error(`[Sync] Error parsing value for pulled key "${key}":`, e);
+            }
           }
-        } catch (e) {
-          console.error(`[Sync] Error parsing value for pulled key "${key}":`, e);
         }
       }
+    } else if (res.status !== 404) {
+      console.warn('[Sync] Pull from cloud (data) failed:', await res.text());
     }
   } catch (err) {
-    console.error('[Sync] Error pulling from cloud:', err);
+    console.error('[Sync] Error pulling from cloud (data):', err);
+  }
+
+  // 2. Pull fixed events (skip if a local write occurred within the last 10 seconds to avoid race conditions)
+  if (Date.now() - lastFixedEventsWriteTime > 10000) {
+    try {
+      const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/fixed_events`;
+      const res = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${auth.idToken}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const firestoreEvents = [];
+        if (data.documents) {
+          for (const doc of data.documents) {
+            firestoreEvents.push(firestoreToJs(doc));
+          }
+        }
+        const localEvents = (await get('fixed_events')) || [];
+        if (JSON.stringify(localEvents) !== JSON.stringify(firestoreEvents)) {
+          await chrome.storage.local.set({ fixed_events: firestoreEvents });
+        }
+      } else if (res.status !== 404) {
+        console.warn('[Sync] Pull from cloud (fixed_events) failed:', await res.text());
+      }
+    } catch (err) {
+      console.error('[Sync] Error pulling from cloud (fixed_events):', err);
+    }
   }
 }
 

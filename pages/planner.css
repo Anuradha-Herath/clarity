@@ -1368,6 +1368,232 @@
   }
 }
 
+/* ── Fixed Events Styles ────────────────────────────────────── */
+
+.day-fixed-events-banner-zone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+.fixed-event-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+  user-select: none;
+  border: 1.5px solid transparent;
+}
+.fixed-event-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.fixed-event-chip.deadline {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+.fixed-event-chip.deadline:hover {
+  background-color: #fecaca;
+}
+.fixed-event-chip.appointment {
+  background-color: #dbeafe;
+  color: #3b82f6;
+  border-color: #93c5fd;
+}
+.fixed-event-chip.appointment:hover {
+  background-color: #bfdbfe;
+}
+.fixed-event-chip.reminder {
+  background-color: #ffedd5;
+  color: #b45309;
+  border-color: #fdba74;
+}
+.fixed-event-chip.reminder:hover {
+  background-color: #fed7aa;
+}
+
+.countdown-banner {
+  animation: slideDown 250ms ease-out;
+}
+
+.countdown-banner.deadline {
+  background-color: #fff5f5;
+  border-color: #fee2e2;
+}
+
+.countdown-banner.appointment {
+  background-color: #f0f7ff;
+  border-color: #e0f2fe;
+}
+
+.week-fixed-events-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border-bottom: none;
+}
+.week-fixed-events-cell:not(:empty) {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.month-day-fixed-events-container {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.month-event-pill {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(100% - 8px);
+  margin-left: 4px;
+  transition: all 150ms ease;
+}
+.month-event-pill:hover {
+  transform: translateX(1px);
+  filter: brightness(0.95);
+}
+
+.month-event-pill.deadline {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-left-color: #b91c1c;
+}
+
+.month-event-pill.appointment {
+  background-color: #dbeafe;
+  color: #3b82f6;
+  border-left-color: #3b82f6;
+}
+
+.month-event-pill.reminder {
+  background-color: #ffedd5;
+  color: #b45309;
+  border-left-color: #b45309;
+}
+
+.month-event-pill-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.month-event-more {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-top: 1px;
+  padding-left: 10px;
+}
+
+/* Completed fixed events */
+.fixed-event-chip.completed,
+.month-event-pill.completed,
+.upcoming-event-item.completed,
+.month-sidebar-event-item.completed,
+.fixed-event-bar.completed {
+  text-decoration: line-through;
+  opacity: 0.6;
+  filter: saturate(0.6);
+}
+
+/* Month view mid-range dots (outlined/lighter) */
+.month-event-pill.mid-range {
+  background-color: transparent !important;
+  border: 1px solid currentColor !important;
+  font-weight: normal;
+}
+
+/* Week View multi-day container & bars */
+.week-multi-day-container {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px 0;
+  padding: 8px 0;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  min-width: 700px;
+  box-sizing: border-box;
+}
+.week-multi-day-container.hidden {
+  display: none;
+}
+
+.fixed-event-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  border: 1.5px solid transparent;
+  margin: 2px 0;
+  height: 24px;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fixed-event-bar:hover {
+  transform: translateY(-0.5px);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.fixed-event-bar.deadline {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+.fixed-event-bar.deadline:hover {
+  background-color: #fecaca;
+}
+
+.fixed-event-bar.appointment {
+  background-color: #dbeafe;
+  color: #3b82f6;
+  border-color: #93c5fd;
+}
+.fixed-event-bar.appointment:hover {
+  background-color: #bfdbfe;
+}
+
+.fixed-event-bar.reminder {
+  background-color: #ffedd5;
+  color: #b45309;
+  border-color: #fdba74;
+}
+.fixed-event-bar.reminder:hover {
+  background-color: #fed7aa;
+}
+
 
 
 
