@@ -16,6 +16,7 @@ import {
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
+import { getRewardBalance, startRewardSession } from '../shared/rewardService.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 function escHtml(s) {
@@ -24,7 +25,12 @@ function escHtml(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function isoDate(d) { return d.toISOString().slice(0, 10); }
+function isoDate(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 function fmtRelTime(isoStr) {
   if (!isoStr) return '';
@@ -283,16 +289,48 @@ async function processInboxItem(id, route, text) {
       break;
 
     case 'someday': {
-      const goals = (await get('goals_long')) ?? [];
-      goals.push({ id: generateId(), title: text, status: 'active', description: '', targetDate: '' });
-      await set('goals_long', goals);
+      const goals = (await get('goals')) ?? [];
+      const auth = await get('firebase_auth');
+      goals.push({
+        id: generateId(),
+        userId: auth?.localId || '',
+        title: text,
+        timeframe: 'longterm',
+        isSmart: false,
+        specific: null,
+        measurable: null,
+        targetDate: null,
+        parentGoalId: null,
+        progress: 0,
+        linkedTaskCount: 0,
+        completedTaskCount: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      await set('goals', goals);
       break;
     }
 
     case 'goal': {
-      const goals = (await get('goals_short')) ?? [];
-      goals.push({ id: generateId(), title: text, status: 'active', description: '', targetDate: '' });
-      await set('goals_short', goals);
+      const goals = (await get('goals')) ?? [];
+      const auth = await get('firebase_auth');
+      goals.push({
+        id: generateId(),
+        userId: auth?.localId || '',
+        title: text,
+        timeframe: 'shortterm',
+        isSmart: false,
+        specific: null,
+        measurable: null,
+        targetDate: null,
+        parentGoalId: null,
+        progress: 0,
+        linkedTaskCount: 0,
+        completedTaskCount: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      await set('goals', goals);
       break;
     }
 
@@ -383,7 +421,160 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes['habits']) {
     renderHabitsWidget();
   }
+  if (changes['rewardBalance']) {
+    renderRewardCard();
+  }
 });
+
+// ─── Reward Time Card & Modal Controllers ──────────────────────────────────────
+
+async function renderRewardCard() {
+  const auth = await get('firebase_auth');
+  const userId = auth?.localId || '';
+  const balance = await getRewardBalance(userId);
+
+  const availableEl = document.getElementById('reward-available-label');
+  const earnedWeekEl = document.getElementById('reward-earned-week');
+  const spentWeekEl = document.getElementById('reward-spent-week');
+  const earnedFill = document.getElementById('reward-earned-fill');
+  const spentFill = document.getElementById('reward-spent-fill');
+  const earnedPctLabel = document.getElementById('reward-earned-pct-label');
+  const spentPctLabel = document.getElementById('reward-spent-pct-label');
+
+  if (!availableEl || !earnedWeekEl || !spentWeekEl || !earnedFill || !spentFill || !earnedPctLabel || !spentPctLabel) return;
+
+  const available = balance.minutesAvailable || 0;
+  const earned = balance.minutesEarnedThisWeek || 0;
+  const spent = balance.minutesSpentThisWeek || 0;
+
+  availableEl.textContent = `${available} min available`;
+  earnedWeekEl.textContent = `${earned} min`;
+  spentWeekEl.textContent = `${spent} min`;
+
+  // Neutral weekly progress comparison bar calculations
+  const maxVal = Math.max(earned, spent, 60);
+  const earnedPct = Math.round((earned / maxVal) * 100);
+  const spentPct = Math.round((spent / maxVal) * 100);
+
+  earnedFill.style.width = `${earnedPct}%`;
+  spentFill.style.width = `${spentPct}%`;
+
+  earnedPctLabel.textContent = `${earned} min`;
+  spentPctLabel.textContent = `${spent} min`;
+}
+
+function setupRewardTimeHandlers() {
+  const btnUseReward = document.getElementById('btn-use-reward');
+  const modalOverlay = document.getElementById('reward-modal-overlay');
+  const btnCloseModal = document.getElementById('btn-close-reward-modal');
+  const btnCancelReward = document.getElementById('btn-cancel-reward');
+  const btnStartReward = document.getElementById('btn-start-reward');
+  const slider = document.getElementById('reward-duration-slider');
+  const display = document.getElementById('reward-duration-display');
+  const quickBtns = document.querySelectorAll('.reward-quick-btn');
+  const labelInput = document.getElementById('reward-label-input');
+  const hint = document.getElementById('reward-available-hint');
+
+  if (!btnUseReward || !modalOverlay) return;
+
+  const openModal = async () => {
+    const auth = await get('firebase_auth');
+    const userId = auth?.localId || '';
+    const balance = await getRewardBalance(userId);
+    const available = balance.minutesAvailable || 0;
+
+    // Reset input fields
+    labelInput.value = '';
+    
+    // Update hint
+    hint.textContent = `Available: ${available} min`;
+
+    // Cap slider and buttons
+    slider.max = available;
+    if (available >= 5) {
+      slider.disabled = false;
+      slider.min = 5;
+      slider.step = 5;
+      // Default to 15m or available if less
+      const defaultVal = Math.min(15, Math.floor(available / 5) * 5 || available);
+      slider.value = defaultVal;
+      display.textContent = `${defaultVal} min`;
+      btnStartReward.disabled = false;
+      btnStartReward.style.opacity = '1';
+      btnStartReward.style.pointerEvents = 'auto';
+    } else {
+      // Not enough minutes
+      slider.min = 0;
+      slider.max = 0;
+      slider.value = 0;
+      slider.disabled = true;
+      display.textContent = `0 min`;
+      btnStartReward.disabled = true;
+      btnStartReward.style.opacity = '0.5';
+      btnStartReward.style.pointerEvents = 'none';
+    }
+
+    // Toggle quick select buttons
+    quickBtns.forEach(btn => {
+      const minutes = parseInt(btn.dataset.min, 10);
+      if (minutes > available) {
+        btn.disabled = true;
+        btn.style.opacity = '0.4';
+        btn.style.pointerEvents = 'none';
+      } else {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.pointerEvents = 'auto';
+      }
+    });
+
+    modalOverlay.classList.remove('hidden');
+  };
+
+  const closeModal = () => {
+    modalOverlay.classList.add('hidden');
+  };
+
+  btnUseReward.onclick = openModal;
+  btnCloseModal.onclick = closeModal;
+  btnCancelReward.onclick = closeModal;
+  
+  // Close on backdrop click
+  modalOverlay.onclick = (e) => {
+    if (e.target === modalOverlay) closeModal();
+  };
+
+  // Slider change listener
+  slider.oninput = () => {
+    display.textContent = `${slider.value} min`;
+  };
+
+  // Quick select buttons click listener
+  quickBtns.forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      const minutes = parseInt(btn.dataset.min, 10);
+      slider.value = minutes;
+      display.textContent = `${minutes} min`;
+    };
+  });
+
+  // Start session click listener
+  btnStartReward.onclick = async () => {
+    const minutes = parseInt(slider.value, 10);
+    if (isNaN(minutes) || minutes <= 0) return;
+
+    const label = labelInput.value.trim();
+    const auth = await get('firebase_auth');
+    const userId = auth?.localId || '';
+
+    if (userId) {
+      await startRewardSession(userId, minutes, label);
+      closeModal();
+      await renderRewardCard();
+    }
+  };
+}
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
@@ -403,6 +594,7 @@ async function init() {
     renderInbox(),
     renderWeekProgress(),
     renderHabitsWidget(),
+    renderRewardCard(),
   ]);
 
   if (dashHabitsCard) {
@@ -410,6 +602,8 @@ async function init() {
       window.location.href = 'habits/habits.html';
     });
   }
+
+  setupRewardTimeHandlers();
 
   // Initialize automatic synchronization
   initAutoSync();

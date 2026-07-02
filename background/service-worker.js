@@ -95,14 +95,21 @@ async function swCarryForwardTasks(fromDate, toDate) {
   }
 }
 
+function formatLocalDate(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  return formatLocalDate(new Date());
 }
 
 function dateKey(offsetDays) {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
+  return formatLocalDate(d);
 }
 
 // ─── Alarm scheduling helpers ──────────────────────────────────────────────────
@@ -137,6 +144,7 @@ async function registerDailyAlarms() {
     clearAlarmSafe(ALARM_MORNING),
     clearAlarmSafe(ALARM_NIGHT),
     clearAlarmSafe(ALARM_PREP),
+    clearAlarmSafe('midnight_reregister'),
   ]);
 
   // Morning ritual
@@ -157,10 +165,19 @@ async function registerDailyAlarms() {
     periodInMinutes: 24 * 60,
   });
 
+  // Midnight reregister / auto carry-forward
+  const midnight = new Date();
+  midnight.setHours(24, 0, 0, 0); // next midnight local time
+  chrome.alarms.create('midnight_reregister', {
+    when: midnight.getTime(),
+    periodInMinutes: 24 * 60,
+  });
+
   console.log('[SW] Daily alarms registered:', {
     morningTime: settings.morningTime,
     nightTime:   settings.nightTime,
     prep:        '21:00',
+    midnight:    midnight.toLocaleString(),
   });
 }
 
@@ -414,19 +431,6 @@ chrome.runtime.onStartup.addListener(async () => {
   console.log('[SW] onStartup — re-registering daily alarms');
   await registerDailyAlarms();
   chrome.alarms.create('auto_cloud_sync', { periodInMinutes: 5 });
-});
-
-// Daily midnight re-registration via a dedicated midnight alarm
-chrome.runtime.onInstalled.addListener(() => {
-  // Register a midnight alarm to re-register daily alarms each day
-  chrome.alarms.create('midnight_reregister', {
-    when: (() => {
-      const midnight = new Date();
-      midnight.setHours(24, 0, 0, 0); // next midnight
-      return midnight.getTime();
-    })(),
-    periodInMinutes: 24 * 60,
-  });
 });
 
 // Alarm fires

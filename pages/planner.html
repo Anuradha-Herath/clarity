@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="planner.css" />
 </head>
 <body>
-  <div class="page-wrapper">
+  <div class="page-wrapper planner-wrapper">
 
     <!-- ── Header ─────────────────────────────────────────── -->
     <header class="page-header">
@@ -123,6 +123,7 @@
                 Tasks
               </div>
               <div class="flex items-center gap-2">
+                <button class="btn btn-ghost btn-xs" id="btn-carry-yesterday" style="font-size: 11px; padding: 2px 6px; color: var(--color-accent);" title="Carry forward incomplete tasks from yesterday">Carry From Yesterday</button>
                 <button class="btn btn-ghost btn-xs" id="btn-manage-categories" style="font-size: 11px; padding: 2px 6px;">Manage Cats</button>
                 <span class="text-xs text-muted" id="priority-task-count"></span>
               </div>
@@ -148,9 +149,15 @@
                   <div class="priority-dot-btn" data-p="2" title="Medium priority"></div>
                   <div class="priority-dot-btn" data-p="3" title="Low priority"></div>
                 </div>
-                <select id="quick-add-category-input" class="select select-sm" style="width: 140px; height: 24px; font-size: 11px; padding: 0 4px;">
-                  <!-- Dynamically populated -->
-                </select>
+                <div class="flex gap-2">
+                  <select id="quick-add-category-input" class="select select-sm" style="width: 90px; height: 24px; font-size: 11px; padding: 0 4px;">
+                    <!-- Dynamically populated -->
+                  </select>
+                  <select id="quick-add-goal-input" class="select select-sm" style="width: 110px; height: 24px; font-size: 11px; padding: 0 4px;">
+                    <option value="">No goal</option>
+                    <!-- Dynamically populated -->
+                  </select>
+                </div>
               </div>
               <div class="flex gap-2">
                 <input type="text" id="priority-input" class="input input-sm flex-1"
@@ -303,20 +310,22 @@
 
         <!-- Right sidebar for monthly goals -->
         <div class="month-goals-sidebar" id="month-goals-sidebar">
-          <div class="month-sidebar-header">
-            <h4>Monthly Goals</h4>
-            <span class="month-sidebar-subtitle">Focus & Milestones</span>
-          </div>
-          <div class="month-goals-list" id="month-goals-list">
-            <!-- Will be populated dynamically by JS -->
-          </div>
-          <div class="month-goals-footer" style="margin-bottom: 24px;">
-            <input type="text" id="month-goal-input" class="input input-sm" placeholder="New monthly goal..." maxlength="100" />
-            <button class="btn btn-primary btn-sm" id="btn-add-month-goal">Add</button>
+          <div class="month-goals-section" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+            <div class="month-sidebar-header">
+              <h4>Monthly Goals</h4>
+              <span class="month-sidebar-subtitle">Focus & Milestones</span>
+            </div>
+            <div class="month-goals-list" id="month-goals-list">
+              <!-- Will be populated dynamically by JS -->
+            </div>
+            <div class="month-goals-footer" style="margin-bottom: 12px;">
+              <input type="text" id="month-goal-input" class="input input-sm" placeholder="New monthly goal..." maxlength="100" />
+              <button class="btn btn-primary btn-sm" id="btn-add-month-goal">Add</button>
+            </div>
           </div>
 
           <!-- Month Fixed Events Section -->
-          <div class="month-fixed-events-section" style="border-top: 1px solid var(--color-border); padding-top: 16px; display: flex; flex-direction: column; flex: 1; min-height: 0;">
+          <div class="month-fixed-events-section" style="border-top: 1px solid var(--color-border); padding-top: 12px; display: flex; flex-direction: column; flex: 1; min-height: 0;">
             <div class="month-sidebar-header" style="padding: 0 16px 12px 16px; border-bottom: 1px solid var(--color-border);">
               <h4>Fixed Commitments</h4>
               <span class="month-sidebar-subtitle">Non-negotiable Anchors</span>
@@ -387,6 +396,13 @@
             <!-- Dynamically populated -->
           </select>
         </div>
+        <div class="form-group">
+          <label class="label" for="task-goal-input">Link to Goal</label>
+          <select id="task-goal-input" class="select">
+            <option value="">No goal</option>
+            <!-- Dynamically populated -->
+          </select>
+        </div>
         <div class="form-row">
           <div class="form-group">
             <label class="label" for="task-priority-input">Priority</label>
@@ -406,8 +422,12 @@
             Subtasks
             <span class="text-xs text-muted" id="subtask-progress">0/0</span>
           </label>
-          <div class="flex gap-2" style="margin-bottom: 8px;">
+          <div class="flex gap-2" style="margin-bottom: 8px; align-items: center;">
             <input type="text" id="task-subtask-input" class="input flex-1 input-sm" placeholder="Add a subtask…" maxlength="150" />
+            <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+              <input type="number" id="task-subtask-duration" class="input input-sm" min="1" max="480" placeholder="e.g. 30" style="width: 75px; height: 32px; padding: 4px 8px; font-size: 12px;" />
+              <span class="text-xs text-muted">min</span>
+            </div>
             <button class="btn btn-primary btn-sm" id="btn-add-subtask" style="height: 32px; padding: 0 10px;">Add</button>
           </div>
           <div id="modal-subtasks-list" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">

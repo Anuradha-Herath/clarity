@@ -152,10 +152,94 @@
           </div>
         </div>
 
+        <!-- ── Reward Time ──────────────────────────── -->
+        <div class="card dash-card" id="dash-reward-card">
+          <div class="card-header">
+            <div class="card-title">
+              <span style="font-size: 15px; margin-right: 4px;">🎮</span>
+              Reward Time
+            </div>
+            <span class="text-sm font-semibold text-accent" id="reward-available-label">0 min available</span>
+          </div>
+          <div class="card-body">
+            <div class="flex-justify-between text-xs text-muted mb-2">
+              <span>Earned this week: <strong id="reward-earned-week">0 min</strong></span>
+              <span>Spent this week: <strong id="reward-spent-week">0 min</strong></span>
+            </div>
+            
+            <!-- Weekly progress comparison bars -->
+            <div style="margin-bottom: var(--space-4);">
+              <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px;">
+                <span>Earned</span>
+                <span id="reward-earned-pct-label">0 min</span>
+              </div>
+              <div class="reward-progress-track" style="margin-bottom: var(--space-2);">
+                <div class="reward-progress-fill-earned" id="reward-earned-fill" style="width: 0%"></div>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px;">
+                <span>Spent</span>
+                <span id="reward-spent-pct-label">0 min</span>
+              </div>
+              <div class="reward-progress-track">
+                <div class="reward-progress-fill-spent" id="reward-spent-fill" style="width: 0%"></div>
+              </div>
+            </div>
+            
+            <button class="btn btn-primary w-full btn-sm" id="btn-use-reward">Use Reward Time</button>
+          </div>
+        </div>
+
       </div><!-- end dash-right -->
     </div><!-- end dash-main -->
 
   </div><!-- end page-wrapper -->
+
+  <!-- ── Use Reward Time Modal ──────────────────────────────── -->
+  <div class="modal-overlay hidden" id="reward-modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">Use Reward Time</h2>
+        <button class="btn-close" id="btn-close-reward-modal">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-sm text-muted mb-4" style="line-height: 1.5;">
+          Spend your earned minutes on preferred activities. Select a duration and write what you'll be doing.
+        </p>
+        
+        <div class="form-group mb-4">
+          <label class="form-label" style="display:block; margin-bottom:8px; font-weight: 500;">Duration</label>
+          
+          <!-- Slider -->
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+            <input type="range" id="reward-duration-slider" min="5" max="120" step="5" value="15" style="flex: 1;" />
+            <span class="text-sm font-semibold text-accent" id="reward-duration-display" style="min-width: 50px; text-align: right;">15 min</span>
+          </div>
+          
+          <!-- Quick select buttons -->
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+            <button type="button" class="btn btn-secondary btn-sm reward-quick-btn" data-min="5">5 min</button>
+            <button type="button" class="btn btn-secondary btn-sm reward-quick-btn" data-min="15">15 min</button>
+            <button type="button" class="btn btn-secondary btn-sm reward-quick-btn" data-min="30">30 min</button>
+            <button type="button" class="btn btn-secondary btn-sm reward-quick-btn" data-min="60">60 min</button>
+          </div>
+        </div>
+        
+        <div class="form-group mb-4">
+          <label class="form-label" for="reward-label-input" style="display:block; margin-bottom:8px; font-weight: 500;">Activity Label (optional)</label>
+          <input type="text" id="reward-label-input" class="input w-full" placeholder="e.g. YouTube break, social media" maxlength="50" style="width: 100%; box-sizing: border-box;" />
+        </div>
+        
+        <div class="text-xs text-muted mb-2 text-right" id="reward-available-hint">
+          Available: 0 min
+        </div>
+      </div>
+      
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-reward">Cancel</button>
+        <button class="btn btn-primary" id="btn-start-reward">Start Session</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="dashboard.js"></script>
 </body>

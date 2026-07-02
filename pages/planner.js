@@ -12,8 +12,11 @@ import {
   generateId, todayKey, dateKey,
   snapHour,
   getCustomCategories, addCustomCategory, deleteCustomCategory, renameCustomCategory,
+  getDailyCategoryOrder, saveDailyCategoryOrder,
   initAutoSync,
   getAuth,
+  getGoals, runGoalsMigration,
+  carryForwardTasks,
 } from '../shared/storage.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
@@ -31,12 +34,17 @@ import { openFixedEventModal } from '../shared/FixedEventModal.js';
 let showSlHolidays = false;
 
 // ─── Date helpers ──────────────────────────────────────────────────────────────
-function isoDate(d) { return d.toISOString().slice(0, 10); }
+function isoDate(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 function dateKeyFrom(baseDateStr, offset) {
   const d = new Date(baseDateStr + 'T12:00:00');
   d.setDate(d.getDate() + offset);
-  return d.toISOString().slice(0, 10);
+  return isoDate(d);
 }
 
 function formatTimeStr(time24) {
@@ -108,6 +116,7 @@ let timeboardInstance = null;
 let lastAddedCategory = null;
 let expandedQuickAdds = [];
 let expandedSubtaskAdds = [];
+let expandedWeekTasks = [];
 let lastAddedSubtaskTaskId = null;
 
 // ─── Tab switching ─────────────────────────────────────────────────────────────
@@ -595,6 +604,40 @@ async function populateCategoryDropdowns() {
   taskCategoryInput.value = categories.includes(currentModalVal) ? currentModalVal : categories[0] || 'Personal';
 }
 
+async function populateGoalDropdowns() {
+  const goals = await getGoals();
+  const longTermGoals = goals.filter(g => g.timeframe === 'longterm');
+  const shortTermGoals = goals.filter(g => g.timeframe === 'shortterm');
+
+  const optionsHTML = `
+    <option value="">No goal</option>
+    ${longTermGoals.length > 0 ? `
+      <optgroup label="Long-term Goals">
+        ${longTermGoals.map(g => `<option value="${g.id}">${escHtml(g.title)}</option>`).join('')}
+      </optgroup>
+    ` : ''}
+    ${shortTermGoals.length > 0 ? `
+      <optgroup label="Short-term Goals">
+        ${shortTermGoals.map(g => `<option value="${g.id}">${escHtml(g.title)}</option>`).join('')}
+      </optgroup>
+    ` : ''}
+  `;
+
+  const quickAddGoalInput = document.getElementById('quick-add-goal-input');
+  if (quickAddGoalInput) {
+    const currentVal = quickAddGoalInput.value;
+    quickAddGoalInput.innerHTML = optionsHTML;
+    quickAddGoalInput.value = currentVal || '';
+  }
+
+  const taskGoalInput = document.getElementById('task-goal-input');
+  if (taskGoalInput) {
+    const currentVal = taskGoalInput.value;
+    taskGoalInput.innerHTML = optionsHTML;
+    taskGoalInput.value = currentVal || '';
+  }
+}
+
 categoryFilter.addEventListener('change', () => {
   activeCategoryFilter = categoryFilter.value;
   renderPriorityList();
@@ -606,6 +649,27 @@ async function renderPriorityList() {
   const { total: totalTasks, completed: completedTasks } = getTaskCompletionStats(tasks);
   updateDailyProgressCard(totalTasks, completedTasks);
 
+  // Capture active element focus
+  let activeFocusClass = null;
+  let activeFocusData = null;
+  let activeFocusValue = null;
+  let activeFocusCursor = null;
+  const activeEl = document.activeElement;
+  if (activeEl) {
+    if (activeEl.classList.contains('category-quick-add-input')) {
+      activeFocusClass = 'category-quick-add-input';
+      activeFocusData = activeEl.dataset.category;
+      activeFocusValue = activeEl.value;
+      activeFocusCursor = activeEl.selectionStart;
+    } else if (activeEl.classList.contains('subtask-quick-add-input')) {
+      activeFocusClass = 'subtask-quick-add-input';
+      activeFocusData = activeEl.dataset.taskId;
+      activeFocusValue = activeEl.value;
+      activeFocusCursor = activeEl.selectionStart;
+    }
+  }
+
+
   // Sort: priority asc, then undone before done
   const sorted = [...tasks].sort((a, b) => {
     if (a.done !== b.done) return a.done ? 1 : -1;
@@ -615,7 +679,7 @@ async function renderPriorityList() {
   const pCount = tasks.filter((t) => !t.done).length;
   priorityTaskCount.textContent = `${pCount} pending`;
 
-  const categories = await getCustomCategories();
+  const categories = await getDailyCategoryOrder(currentDate);
   
   // Group tasks by category
   const grouped = {};
@@ -649,8 +713,8 @@ async function renderPriorityList() {
     const isQuickAddExpanded = expandedQuickAdds.includes(cat);
 
     html += `
-      <div class="category-group" data-category="${escHtml(cat)}">
-        <div class="category-group-header" data-cat="${escHtml(cat)}" style="cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between;">
+      <div class="category-group" data-category="${escHtml(cat)}" draggable="true">
+        <div class="category-group-header" data-cat="${escHtml(cat)}" style="cursor: grab; user-select: none; display: flex; align-items: center; justify-content: space-between;">
           <div style="display: flex; align-items: center; gap: 6px;">
             <span class="category-group-chevron" style="display: inline-flex; align-items: center; transition: transform 0.2s; transform: ${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'};">
               <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
@@ -681,6 +745,15 @@ async function renderPriorityList() {
                     </svg>
                   </div>
 
+                  <div class="priority-item-details" data-id="${t.id}" title="Task Details">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2.5"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                  </div>
+
                   <div class="priority-item-delete" data-id="${t.id}" title="Delete">
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
                          fill="none" stroke="currentColor" stroke-width="2.5"
@@ -691,14 +764,27 @@ async function renderPriorityList() {
                     </svg>
                   </div>
                 </div>
-                ${t.subtasks && t.subtasks.length > 0 ? `
+                ${t.subtasks && t.subtasks.filter(sub => !sub.done).length > 0 ? `
                   <div class="subtasks-list" style="margin-left: 28px; margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
-                    ${t.subtasks.map(sub => `
-                      <div class="subtask-item" draggable="true" data-task-id="${t.id}" data-sub-id="${sub.id}" style="display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: grab;">
-                        <input type="checkbox" class="subtask-item-check" data-task-id="${t.id}" data-sub-id="${sub.id}" ${sub.done ? 'checked' : ''} style="width: 12px; height: 12px; accent-color: var(--color-accent); cursor: pointer;" />
-                        <span class="subtask-title-text${sub.done ? ' done-text' : ''}" style="font-size: 12px; color: var(--color-text);">${escHtml(sub.title)}</span>
+                    ${t.subtasks.filter(sub => !sub.done).map(sub => `
+                      <div class="subtask-item" draggable="true" data-task-id="${t.id}" data-sub-id="${sub.id}" style="display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: grab; position: relative;">
+                        <input type="checkbox" class="subtask-item-check" data-task-id="${t.id}" data-sub-id="${sub.id}" style="width: 12px; height: 12px; accent-color: var(--color-accent); cursor: pointer;" />
+                        <span class="subtask-title-text" style="font-size: 12px; color: var(--color-text); flex: 1;">${escHtml(sub.title)}</span>
+                        <div class="subtask-item-delete" data-task-id="${t.id}" data-sub-id="${sub.id}" title="Delete Subtask">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                          </svg>
+                        </div>
                       </div>
                     `).join('')}
+                    <div class="subtask-list-add-btn" data-id="${t.id}" style="display: ${isSubtaskExpanded ? 'none' : 'flex'}; padding: 4px 0; color: var(--color-text-muted); cursor: pointer; font-size: 11px; align-items: center; gap: 4px; user-select: none;">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                      </svg>
+                      <span>Add subtask</span>
+                    </div>
                   </div>
                 ` : ''}
                 
@@ -745,19 +831,29 @@ async function renderPriorityList() {
   priorityList.innerHTML = html;
 
   // Restore focus to the quick add input if we just added a task to a category
-  if (lastAddedCategory) {
-    const activeInput = priorityList.querySelector(`.category-quick-add-input[data-category="${lastAddedCategory.replace(/"/g, '\\"')}"]`);
+  let categoryToFocus = activeFocusClass === 'category-quick-add-input' ? activeFocusData : lastAddedCategory;
+  if (categoryToFocus) {
+    const activeInput = priorityList.querySelector(`.category-quick-add-input[data-category="${categoryToFocus.replace(/"/g, '\\"')}"]`);
     if (activeInput) {
       activeInput.focus();
+      if (activeFocusClass === 'category-quick-add-input' && activeFocusValue !== null) {
+        activeInput.value = activeFocusValue;
+        activeInput.setSelectionRange(activeFocusCursor, activeFocusCursor);
+      }
     }
     lastAddedCategory = null;
   }
 
   // Restore focus to the subtask quick add input if we just added a subtask
-  if (lastAddedSubtaskTaskId) {
-    const activeInput = priorityList.querySelector(`.subtask-quick-add-input[data-task-id="${lastAddedSubtaskTaskId.replace(/"/g, '\\"')}"]`);
+  let subtaskToFocus = activeFocusClass === 'subtask-quick-add-input' ? activeFocusData : lastAddedSubtaskTaskId;
+  if (subtaskToFocus) {
+    const activeInput = priorityList.querySelector(`.subtask-quick-add-input[data-task-id="${subtaskToFocus.replace(/"/g, '\\"')}"]`);
     if (activeInput) {
       activeInput.focus();
+      if (activeFocusClass === 'subtask-quick-add-input' && activeFocusValue !== null) {
+        activeInput.value = activeFocusValue;
+        activeInput.setSelectionRange(activeFocusCursor, activeFocusCursor);
+      }
     }
     lastAddedSubtaskTaskId = null;
   }
@@ -800,6 +896,7 @@ async function renderPriorityList() {
         const title = input.value.trim();
         if (!title) return;
         
+        input.value = '';
         lastAddedCategory = cat;
         await addTask(currentDate, {
           id: generateId(),
@@ -833,6 +930,7 @@ async function renderPriorityList() {
       const title = input.value.trim();
       if (!title) return;
       
+      input.value = '';
       lastAddedCategory = cat;
       await addTask(currentDate, {
         id: generateId(),
@@ -848,7 +946,7 @@ async function renderPriorityList() {
   });
 
   // Quick add to subtasks handlers
-  priorityList.querySelectorAll('.priority-item-add-subtask').forEach((btn) => {
+  priorityList.querySelectorAll('.priority-item-add-subtask, .subtask-list-add-btn').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const taskId = btn.dataset.id;
@@ -859,6 +957,10 @@ async function renderPriorityList() {
       const formEl = containerEl ? containerEl.querySelector('.subtask-quick-add-form') : null;
       const inputEl = containerEl ? containerEl.querySelector('.subtask-quick-add-input') : null;
       if (formEl) formEl.style.display = 'flex';
+      
+      const listBtnEl = containerEl ? containerEl.querySelector('.subtask-list-add-btn') : null;
+      if (listBtnEl) listBtnEl.style.display = 'none';
+
       if (inputEl) inputEl.focus();
     });
   });
@@ -873,6 +975,9 @@ async function renderPriorityList() {
       const inputEl = containerEl ? containerEl.querySelector('.subtask-quick-add-input') : null;
       if (inputEl) inputEl.value = '';
       if (formEl) formEl.style.display = 'none';
+      
+      const listBtnEl = containerEl ? containerEl.querySelector('.subtask-list-add-btn') : null;
+      if (listBtnEl) listBtnEl.style.display = 'flex';
     });
   });
 
@@ -885,6 +990,7 @@ async function renderPriorityList() {
         const title = input.value.trim();
         if (!title) return;
         
+        input.value = '';
         const tasks = await getTasks(currentDate);
         const t = tasks.find(x => x.id === taskId);
         if (t) {
@@ -905,6 +1011,9 @@ async function renderPriorityList() {
         const formEl = containerEl ? containerEl.querySelector('.subtask-quick-add-form') : null;
         input.value = '';
         if (formEl) formEl.style.display = 'none';
+        
+        const listBtnEl = containerEl ? containerEl.querySelector('.subtask-list-add-btn') : null;
+        if (listBtnEl) listBtnEl.style.display = 'flex';
       }
     });
   });
@@ -919,6 +1028,7 @@ async function renderPriorityList() {
       const title = input.value.trim();
       if (!title) return;
       
+      input.value = '';
       const tasks = await getTasks(currentDate);
       const t = tasks.find(x => x.id === taskId);
       if (t) {
@@ -1001,11 +1111,102 @@ async function renderPriorityList() {
     });
   });
 
-  // Click title → open edit modal
-  priorityList.querySelectorAll('.priority-item-title').forEach((el) => {
-    el.addEventListener('click', async () => {
+  // Subtask quick delete
+  priorityList.querySelectorAll('.subtask-item-delete').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const taskId = btn.dataset.taskId;
+      const subId = btn.dataset.subId;
       const tasks = await getTasks(currentDate);
-      const t = tasks.find((x) => x.id === el.dataset.id);
+      
+      const t = tasks.find(x => x.id === taskId);
+      if (t && t.subtasks) {
+        t.subtasks = t.subtasks.filter(s => s.id !== subId);
+        await updateTask(currentDate, taskId, { subtasks: t.subtasks });
+        await renderPriorityList();
+      }
+    });
+  });
+
+  // Inline edit helper
+  function enableInlineEdit(el, onSave) {
+    if (el.dataset.editing === 'true') return;
+    el.dataset.editing = 'true';
+    const originalText = el.innerText;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = originalText;
+    input.className = 'input input-sm';
+    input.style.cssText = 'flex: 1; height: 24px; font-size: inherit; padding: 2px 6px; margin: 0 4px;';
+    
+    el.style.display = 'none';
+    el.parentNode.insertBefore(input, el);
+    input.focus();
+    
+    let saved = false;
+    const save = async () => {
+      if (saved) return;
+      saved = true;
+      const newTitle = input.value.trim();
+      input.remove();
+      el.style.display = '';
+      el.dataset.editing = 'false';
+      
+      if (newTitle && newTitle !== originalText) {
+        el.innerText = newTitle;
+        await onSave(newTitle);
+      }
+    };
+    
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        save();
+      } else if (e.key === 'Escape') {
+        saved = true;
+        input.remove();
+        el.style.display = '';
+        el.dataset.editing = 'false';
+      }
+    });
+  }
+
+  // Click title → inline edit
+  priorityList.querySelectorAll('.priority-item-title').forEach((el) => {
+    el.addEventListener('click', () => {
+      enableInlineEdit(el, async (newTitle) => {
+        await updateTask(currentDate, el.dataset.id, { title: newTitle });
+        await renderPriorityList();
+      });
+    });
+  });
+
+  // Click subtask title → inline edit
+  priorityList.querySelectorAll('.subtask-title-text').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const itemEl = el.closest('.subtask-item');
+      const taskId = itemEl.dataset.taskId;
+      const subId = itemEl.dataset.subId;
+      enableInlineEdit(el, async (newTitle) => {
+        const tasks = await getTasks(currentDate);
+        const parent = tasks.find(x => x.id === taskId);
+        if (parent && parent.subtasks) {
+          const sub = parent.subtasks.find(s => s.id === subId);
+          if (sub) {
+            sub.title = newTitle;
+            await updateTask(currentDate, taskId, { subtasks: parent.subtasks });
+            await renderPriorityList();
+          }
+        }
+      });
+    });
+  });
+
+  // Click details icon → open edit modal
+  priorityList.querySelectorAll('.priority-item-details').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const tasks = await getTasks(currentDate);
+      const t = tasks.find((x) => x.id === btn.dataset.id);
       if (t) openTaskModal(t);
     });
   });
@@ -1018,19 +1219,178 @@ async function renderPriorityList() {
     });
   });
 
-  // Dragstart binding
+  // Category group drag-and-drop
+  priorityList.querySelectorAll('.category-group').forEach((group) => {
+    group.addEventListener('dragstart', (e) => {
+      // Only drag if the target is the header or within it, to avoid weird dragging if clicked elsewhere
+      // Wait, we set draggable on the whole group, so it might fire anywhere. 
+      // We rely on e.stopPropagation() from tasks so they drag themselves.
+      const category = group.dataset.category;
+      if (category) {
+        e.dataTransfer.setData('text/plain', JSON.stringify({
+          type: 'category',
+          category: category
+        }));
+        e.dataTransfer.effectAllowed = 'move';
+      }
+    });
+
+    group.addEventListener('dragover', (e) => {
+      // Allow drop only if dragging a category
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      
+      const rect = group.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      if (e.clientY < midY) {
+        group.classList.add('drag-over-category-top');
+        group.classList.remove('drag-over-category-bottom');
+      } else {
+        group.classList.add('drag-over-category-bottom');
+        group.classList.remove('drag-over-category-top');
+      }
+    });
+
+    group.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+    });
+
+    group.addEventListener('dragleave', () => {
+      group.classList.remove('drag-over-category-top', 'drag-over-category-bottom');
+    });
+
+    group.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const isTop = group.classList.contains('drag-over-category-top');
+      group.classList.remove('drag-over-category-top', 'drag-over-category-bottom');
+
+      try {
+        const dataStr = e.dataTransfer.getData('text/plain');
+        if (!dataStr) return;
+        const data = JSON.parse(dataStr);
+        const targetCategory = group.dataset.category;
+
+        if (data && data.type === 'category' && data.category !== targetCategory) {
+          // Reorder categories
+          const currentOrder = await getDailyCategoryOrder(currentDate);
+          
+          const sourceCat = data.category;
+          const sourceIdx = currentOrder.indexOf(sourceCat);
+          const targetIdx = currentOrder.indexOf(targetCategory);
+
+          if (sourceIdx !== -1 && targetIdx !== -1) {
+            currentOrder.splice(sourceIdx, 1);
+            
+            const newTargetIdx = currentOrder.indexOf(targetCategory);
+            
+            if (isTop) {
+              currentOrder.splice(newTargetIdx, 0, sourceCat);
+            } else {
+              currentOrder.splice(newTargetIdx + 1, 0, sourceCat);
+            }
+            
+            await saveDailyCategoryOrder(currentDate, currentOrder);
+            await renderPriorityList();
+          }
+        } else if (data && data.type === 'main-task') {
+          // A task was dropped onto the category group
+          // Let's change the task's category to this group's category
+          const tasks = await getTasks(currentDate);
+          const taskIndex = tasks.findIndex(t => t.id === data.id);
+          if (taskIndex !== -1 && tasks[taskIndex].category !== targetCategory) {
+            tasks[taskIndex].category = targetCategory;
+            await setTasks(currentDate, tasks);
+            await renderPriorityList();
+          }
+        }
+      } catch (err) {
+        console.error('Category drop error:', err);
+      }
+    });
+  });
+
+  // Drag-and-drop binding for main tasks (allows converting to subtask)
   priorityList.querySelectorAll('.priority-item').forEach((item) => {
     item.addEventListener('dragstart', (e) => {
+      e.stopPropagation(); // Avoid triggering parent category drag
       const taskId = item.dataset.id;
       const task = sorted.find(t => t.id === taskId);
       if (task) {
         e.dataTransfer.setData('text/plain', JSON.stringify({
+          type: 'main-task',
           id: task.id,
           title: task.title,
           category: task.category,
           timeEstimate: task.timeEstimate
         }));
         e.dataTransfer.effectAllowed = 'copyMove';
+      }
+    });
+
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('drag-over-task');
+    });
+
+    item.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      item.classList.add('drag-over-task');
+    });
+
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('drag-over-task');
+    });
+
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      item.classList.remove('drag-over-task');
+
+      try {
+        const dataStr = e.dataTransfer.getData('text/plain');
+        if (!dataStr) return;
+        const data = JSON.parse(dataStr);
+        const targetTaskId = item.dataset.id;
+
+        if (data && data.type === 'main-task' && data.id !== targetTaskId) {
+          const tasks = await getTasks(currentDate);
+          const sourceTaskIndex = tasks.findIndex(t => t.id === data.id);
+          const targetTaskIndex = tasks.findIndex(t => t.id === targetTaskId);
+
+          if (sourceTaskIndex !== -1 && targetTaskIndex !== -1) {
+            const sourceTask = tasks[sourceTaskIndex];
+            const targetTask = tasks[targetTaskIndex];
+
+            // Remove sourceTask from main tasks
+            tasks.splice(sourceTaskIndex, 1);
+
+            // Add as subtask to targetTask
+            if (!targetTask.subtasks) targetTask.subtasks = [];
+            targetTask.subtasks.push({
+              id: generateId(),
+              title: sourceTask.title,
+              done: sourceTask.done || false
+            });
+
+            // If sourceTask had its own subtasks, append them too
+            if (sourceTask.subtasks && sourceTask.subtasks.length > 0) {
+              sourceTask.subtasks.forEach(st => {
+                targetTask.subtasks.push({
+                  id: generateId(),
+                  title: st.title,
+                  done: st.done || false
+                });
+              });
+            }
+
+            await setTasks(currentDate, tasks);
+            await renderPriorityList();
+          }
+        }
+      } catch (err) {
+        console.error('Task drop error:', err);
       }
     });
   });
@@ -1063,6 +1423,9 @@ async function addPriorityTask() {
   const title = priorityInput.value.trim();
   if (!title) return;
   const category = quickAddCatInput.value;
+  const quickAddGoalInput = document.getElementById('quick-add-goal-input');
+  const linkedGoalId = quickAddGoalInput ? (quickAddGoalInput.value || null) : null;
+
   await addTask(currentDate, {
     id: generateId(),
     title,
@@ -1070,8 +1433,10 @@ async function addPriorityTask() {
     priority: selectedPriority,
     timeEstimate: null,
     category,
+    linkedGoalId,
   });
   priorityInput.value = '';
+  if (quickAddGoalInput) quickAddGoalInput.value = '';
   await renderPriorityList();
 }
 
@@ -1118,6 +1483,15 @@ function openTaskModal(task = null, date = null) {
   taskCategoryInput.value = task?.category || 'Personal';
   taskEstimateInput.value = task?.timeEstimate ?? '';
   taskSubtaskInput.value = '';
+  const subtaskDurationInput = document.getElementById('task-subtask-duration');
+  if (subtaskDurationInput) {
+    subtaskDurationInput.value = '';
+  }
+
+  const taskGoalInput = document.getElementById('task-goal-input');
+  if (taskGoalInput) {
+    taskGoalInput.value = task?.linkedGoalId || '';
+  }
   
   btnTaskDelete.classList.toggle('hidden', !task);
   taskModalOverlay.classList.remove('hidden');
@@ -1134,7 +1508,10 @@ function renderModalSubtasks() {
     <div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 6px; background: var(--color-bg); border-radius: 4px; font-size: 12px; gap: 6px;">
       <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
         <input type="checkbox" class="modal-subtask-check" data-idx="${idx}" ${sub.done ? 'checked' : ''} style="width: 13px; height: 13px; cursor: pointer; accent-color: var(--color-accent);" />
-        <span class="${sub.done ? 'done-text' : ''}" style="color: var(--color-text); word-break: break-all;">${escHtml(sub.title)}</span>
+        <span class="${sub.done ? 'done-text' : ''}" style="color: var(--color-text); word-break: break-all;">
+          ${escHtml(sub.title)}
+          ${sub.estimatedMinutes ? `<span class="text-xs text-muted" style="margin-left: 6px; font-weight: 500;">(${sub.estimatedMinutes}m)</span>` : ''}
+        </span>
       </div>
       <button type="button" class="btn btn-ghost btn-xs delete-subtask-btn" data-idx="${idx}" style="color: var(--color-danger); padding: 2px; height: auto;">
         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1166,12 +1543,18 @@ function renderModalSubtasks() {
 function addSubtaskFromInput() {
   const title = taskSubtaskInput.value.trim();
   if (!title) return;
+  const durationInput = document.getElementById('task-subtask-duration');
+  const durationVal = durationInput ? durationInput.value.trim() : '';
+  const estimatedMinutes = durationVal ? parseInt(durationVal, 10) || null : null;
+
   editingSubtasks.push({
     id: generateId(),
     title,
-    done: false
+    done: false,
+    estimatedMinutes
   });
   taskSubtaskInput.value = '';
+  if (durationInput) durationInput.value = '';
   renderModalSubtasks();
   taskSubtaskInput.focus();
 }
@@ -1201,6 +1584,8 @@ async function saveTask() {
   const category    = taskCategoryInput.value;
   const timeEstimate= parseInt(taskEstimateInput.value, 10) || null;
   const subtasks    = editingSubtasks;
+  const taskGoalInput = document.getElementById('task-goal-input');
+  const linkedGoalId = taskGoalInput ? (taskGoalInput.value || null) : null;
 
   const targetDate = editingTaskDate || currentDate;
 
@@ -1211,12 +1596,13 @@ async function saveTask() {
       const categoryChanged = category !== editingTask.category;
       const estimateChanged = timeEstimate !== editingTask.timeEstimate;
       const subtasksChanged = JSON.stringify(subtasks) !== JSON.stringify(editingTask.subtasks || []);
+      const goalChanged = linkedGoalId !== (editingTask.linkedGoalId || null);
       
-      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged) {
+      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged || goalChanged) {
         habitConfirmModalOverlay.classList.remove('hidden');
         btnHabitConfirmSave.onclick = async () => {
           const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
-          await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks }, editMode);
+          await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks, linkedGoalId }, editMode);
           closeHabitConfirmModal();
           closeTaskModal();
           await refreshActiveTab();
@@ -1227,10 +1613,10 @@ async function saveTask() {
         return;
       }
     }
-    await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks });
+    await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks, linkedGoalId });
   } else {
     await addTask(targetDate, {
-      id: generateId(), title, done: false, priority, timeEstimate, category, subtasks,
+      id: generateId(), title, done: false, priority, timeEstimate, category, subtasks, linkedGoalId,
     });
   }
   closeTaskModal();
@@ -1426,6 +1812,21 @@ newCategoryInput.addEventListener('keydown', (e) => {
     handleAddCategory();
   }
 });
+
+// Carry forward all incomplete tasks from yesterday
+const btnCarryYesterday = document.getElementById('btn-carry-yesterday');
+if (btnCarryYesterday) {
+  btnCarryYesterday.addEventListener('click', async () => {
+    const yesterday = dateKeyFrom(currentDate, -1);
+    const count = await carryForwardTasks(yesterday, currentDate);
+    if (count > 0) {
+      showAlert(`Successfully carried forward ${count} incomplete task(s) from yesterday!`);
+      await renderPriorityList();
+    } else {
+      showAlert('No incomplete tasks found from yesterday (or they are already present today).');
+    }
+  });
+}
 
 // ── Notes ───────────────────────────────────────────────────────────────────
 const dayNotesEl = document.getElementById('day-notes');
@@ -1786,40 +2187,108 @@ function renderWeekTaskList(tasks, date, container) {
     return (a.priority ?? 3) - (b.priority ?? 3);
   });
 
-  container.innerHTML = sorted.map((t) => `
-    <div class="week-task-item" data-id="${t.id}" data-date="${date}" draggable="true">
-      <input type="checkbox" class="week-task-check" data-id="${t.id}" data-date="${date}" ${t.done ? 'checked' : ''} />
-      <span class="week-task-title${t.done ? ' done-text' : ''}" data-id="${t.id}" data-date="${date}">${escHtml(t.title)}</span>
-      <div class="week-task-actions">
-        ${!t.done ? `
-          <button class="week-action-btn carry" data-id="${t.id}" data-date="${date}" title="Carry to next day">
-            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-            </svg>
-          </button>
-        ` : ''}
-        <button class="week-action-btn edit" data-id="${t.id}" data-date="${date}" title="Edit task">
-          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4z"/>
+  container.innerHTML = sorted.map((t) => {
+    const hasSubtasks = t.subtasks && t.subtasks.length > 0;
+    const isExpanded = expandedWeekTasks.includes(t.id);
+    const undoneSubtasks = hasSubtasks ? t.subtasks.filter(s => !s.done).length : 0;
+    
+    let subtaskHtml = '';
+    if (hasSubtasks) {
+      subtaskHtml = `
+        <div class="week-task-subtasks-toggle" data-id="${t.id}" data-date="${date}" style="font-size: 10px; color: var(--color-text-muted); cursor: pointer; display: flex; align-items: center; gap: 4px; user-select: none; margin-top: 2px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(${isExpanded ? '90deg' : '0deg'}); transition: transform 0.2s;">
+            <polyline points="9 18 15 12 9 6"></polyline>
           </svg>
-        </button>
-        <button class="week-action-btn delete" data-id="${t.id}" data-date="${date}" title="Delete task">
-          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            <line x1="10" y1="11" x2="10" y2="17"/>
-            <line x1="14" y1="11" x2="14" y2="17"/>
-          </svg>
-        </button>
+          ${t.subtasks.length} subtask${t.subtasks.length > 1 ? 's' : ''} (${t.subtasks.length - undoneSubtasks}/${t.subtasks.length})
+        </div>
+      `;
+      if (isExpanded) {
+        subtaskHtml += `
+          <div class="week-task-subtasks-list" style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px; width: 100%;">
+            ${t.subtasks.map(sub => `
+              <div class="week-task-subtask-item" style="display: flex; align-items: flex-start; gap: 6px; padding-left: 2px;">
+                <input type="checkbox" class="week-task-subtask-check" data-id="${sub.id}" data-parent-id="${t.id}" data-date="${date}" ${sub.done ? 'checked' : ''} style="width: 12px; height: 12px; accent-color: var(--color-accent); cursor: pointer; margin-top: 1px; flex-shrink: 0;" />
+                <span class="week-task-subtask-title${sub.done ? ' done-text' : ''}" style="font-size: 11px; color: var(--color-text); line-height: 1.3; overflow-wrap: anywhere;">${escHtml(sub.title)}</span>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+    }
+
+    return `
+      <div class="week-task-item" data-id="${t.id}" data-date="${date}" draggable="true" style="flex-direction: column; align-items: stretch; padding-bottom: ${isExpanded && hasSubtasks ? '8px' : '6px'};">
+        <div style="display: flex; align-items: flex-start; gap: 6px; width: 100%;">
+          <input type="checkbox" class="week-task-check" data-id="${t.id}" data-date="${date}" ${t.done ? 'checked' : ''} />
+          <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+            <span class="week-task-title${t.done ? ' done-text' : ''}" data-id="${t.id}" data-date="${date}">${escHtml(t.title)}</span>
+            ${subtaskHtml}
+          </div>
+          <div class="week-task-actions">
+            ${!t.done ? `
+              <button class="week-action-btn carry" data-id="${t.id}" data-date="${date}" title="Carry to next day">
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                </svg>
+              </button>
+            ` : ''}
+            <button class="week-action-btn edit" data-id="${t.id}" data-date="${date}" title="Edit task">
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4z"/>
+              </svg>
+            </button>
+            <button class="week-action-btn delete" data-id="${t.id}" data-date="${date}" title="Delete task">
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                <line x1="10" y1="11" x2="10" y2="17"/>
+                <line x1="14" y1="11" x2="14" y2="17"/>
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   // Checkbox
   container.querySelectorAll('.week-task-check').forEach((cb) => {
     cb.addEventListener('change', async () => {
       await updateTask(cb.dataset.date, cb.dataset.id, { done: cb.checked });
+      renderWeekTab();
+    });
+  });
+
+  // Subtask checkbox
+  container.querySelectorAll('.week-task-subtask-check').forEach((cb) => {
+    cb.addEventListener('change', async () => {
+      const parentId = cb.dataset.parentId;
+      const subId = cb.dataset.id;
+      const date = cb.dataset.date;
+      const allTasks = await getTasks(date);
+      const parent = allTasks.find(t => t.id === parentId);
+      if (parent && parent.subtasks) {
+        const sub = parent.subtasks.find(s => s.id === subId);
+        if (sub) {
+          sub.done = cb.checked;
+          await updateTask(date, parentId, { subtasks: parent.subtasks });
+          renderWeekTab();
+        }
+      }
+    });
+  });
+
+  // Subtask expand toggle
+  container.querySelectorAll('.week-task-subtasks-toggle').forEach((toggle) => {
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const taskId = toggle.dataset.id;
+      if (expandedWeekTasks.includes(taskId)) {
+        expandedWeekTasks = expandedWeekTasks.filter(id => id !== taskId);
+      } else {
+        expandedWeekTasks.push(taskId);
+      }
       renderWeekTab();
     });
   });
@@ -2738,7 +3207,9 @@ async function init() {
   const categories = await getCustomCategories();
   activeCat = categories[0] || 'Personal';
   mountDayBoard();
+  await runGoalsMigration();
   await populateCategoryDropdowns();
+  await populateGoalDropdowns();
   await renderPriorityList();
   await loadNotes();
 
@@ -2794,10 +3265,12 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     key === 'monthly_themes' ||
     key === 'monthly_goals' ||
     key === 'show_sl_holidays' ||
-    key === 'fixed_events'
+    key === 'fixed_events' ||
+    key === 'goals'
   );
 
   if (hasPlannerChanges) {
+    await populateGoalDropdowns();
     if (activeTab === 'day') {
       await onDayChanged();
     } else {

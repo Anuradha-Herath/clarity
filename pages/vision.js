@@ -6,13 +6,16 @@
 
 import {
   getVision, patchVision,
-  getSmartGoals, getLongGoals, getShortGoals,
   get, set, push, remove, update,
   generateId, compressImage,
   checkStorageSize,
   initAutoSync,
+  getGoals, saveGoals, runGoalsMigration,
+  getTasks, updateTask, addTask,
+  todayKey,
 } from '../shared/storage.js';
 import { showConfirm, showAlert } from '../shared/dialog.js';
+import { recalculateGoalProgress, recalculateParentProgress } from '../shared/goalsProgressService.js';
 
 // ─── Category colour helper ────────────────────────────────────────────────────
 function getCategoryColor(cat) {
@@ -152,200 +155,10 @@ btnRemoveImg.addEventListener('click', async () => {
 });
 
 // ─── ══════════════════════════════════════════════════════════
-//     2. SMART GOALS
+//     2. UNIFIED GOALS SYSTEM
 // ══════════════════════════════════════════════════════════════
 
-const smartScroll     = document.getElementById('smart-scroll');
-const smartAddCard    = document.getElementById('smart-add-card');
-const smartCount      = document.getElementById('smart-count');
 
-// Modal elements
-const smartModalOverlay  = document.getElementById('smart-modal-overlay');
-const smartModalTitle    = document.getElementById('smart-modal-title');
-const smartModalClose    = document.getElementById('smart-modal-close');
-const btnSmartCancel     = document.getElementById('btn-smart-cancel');
-const btnSmartSave       = document.getElementById('btn-smart-save');
-const btnSmartDelete     = document.getElementById('btn-smart-delete');
-const smartTitle         = document.getElementById('smart-title');
-const smartDesc          = document.getElementById('smart-desc');
-const smartDate          = document.getElementById('smart-date');
-const smartCat           = document.getElementById('smart-cat');
-const smartImgPreview    = document.getElementById('smart-modal-img-preview');
-const smartImgPlaceholder= document.getElementById('smart-modal-img-placeholder');
-const btnSmartImgUpload  = document.getElementById('btn-smart-img-upload');
-const btnSmartImgRemove  = document.getElementById('btn-smart-img-remove');
-const smartImgFile       = document.getElementById('smart-img-file');
-
-let editingSmartId   = null;
-let pendingSmartImg  = null; // base64 or empty string
-
-async function loadSmartGoals() {
-  const goals = await getSmartGoals();
-  smartCount.textContent = `${goals.length} goal${goals.length !== 1 ? 's' : ''}`;
-  renderSmartCards(goals);
-}
-
-function renderSmartCards(goals) {
-  // Remove all cards except the add card
-  smartScroll.querySelectorAll('.smart-card:not(#smart-add-card)').forEach(c => c.remove());
-
-  goals.forEach((g) => {
-    const card = buildSmartCard(g);
-    smartScroll.insertBefore(card, smartAddCard);
-  });
-}
-
-function buildSmartCard(g) {
-  const card = document.createElement('div');
-  card.className = 'smart-card fade-in';
-  card.dataset.id = g.id;
-  card.setAttribute('role', 'button');
-  card.setAttribute('tabindex', '0');
-
-  const hasImg = g.imageBase64 && g.imageBase64.length > 10;
-
-  card.innerHTML = `
-    ${hasImg
-      ? `<img class="smart-card-img" src="${g.imageBase64}" alt="${escHtml(g.title)}" />`
-      : `<div class="smart-card-img-placeholder">
-           <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round">
-             <circle cx="12" cy="12" r="10"/>
-             <circle cx="12" cy="12" r="6"/>
-             <circle cx="12" cy="12" r="2"/>
-           </svg>
-         </div>`
-    }
-    <div class="smart-card-body">
-      <div class="smart-card-title">${escHtml(g.title)}</div>
-      ${g.description ? `<div class="smart-card-desc">${escHtml(g.description)}</div>` : ''}
-      <div class="smart-card-footer">
-        ${catPillHTML(g.category || 'Personal')}
-        ${g.targetDate ? `<span class="smart-card-date">${fmtDate(g.targetDate)}</span>` : ''}
-      </div>
-    </div>
-  `;
-
-  const open = () => openSmartModal(g);
-  card.addEventListener('click', open);
-  card.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
-  });
-
-  return card;
-}
-
-function openSmartModal(goal = null) {
-  editingSmartId = goal ? goal.id : null;
-  pendingSmartImg = goal ? (goal.imageBase64 ?? '') : '';
-
-  smartModalTitle.textContent = goal ? 'Edit SMART Goal' : 'Add SMART Goal';
-  smartTitle.value  = goal?.title       ?? '';
-  smartDesc.value   = goal?.description ?? '';
-  smartDate.value   = goal?.targetDate  ?? '';
-  smartCat.value    = goal?.category    ?? 'Personal';
-
-  // Image preview
-  applySmartModalImage(pendingSmartImg);
-
-  btnSmartDelete.classList.toggle('hidden', !goal);
-  smartModalOverlay.classList.remove('hidden');
-  smartTitle.focus();
-}
-
-function applySmartModalImage(base64) {
-  pendingSmartImg = base64;
-  if (base64) {
-    smartImgPreview.src = base64;
-    smartImgPreview.classList.remove('hidden');
-    smartImgPlaceholder.classList.add('hidden');
-    btnSmartImgRemove.classList.remove('hidden');
-  } else {
-    smartImgPreview.classList.add('hidden');
-    smartImgPlaceholder.classList.remove('hidden');
-    btnSmartImgRemove.classList.add('hidden');
-  }
-}
-
-function closeSmartModal() {
-  smartModalOverlay.classList.add('hidden');
-  editingSmartId = null;
-  pendingSmartImg = null;
-  smartImgFile.value = '';
-}
-
-async function saveSmartGoal() {
-  const title = smartTitle.value.trim();
-  if (!title) { smartTitle.focus(); return; }
-
-  const payload = {
-    title,
-    description: smartDesc.value.trim(),
-    targetDate:  smartDate.value,
-    category:    smartCat.value,
-    imageBase64: pendingSmartImg ?? '',
-  };
-
-  if (editingSmartId) {
-    await update('smart_goals', editingSmartId, payload);
-  } else {
-    await push('smart_goals', {
-      id: generateId(),
-      createdAt: new Date().toISOString(),
-      ...payload,
-    });
-  }
-
-  closeSmartModal();
-  await loadSmartGoals();
-}
-
-async function deleteSmartGoal() {
-  if (!editingSmartId) return;
-  const isConfirmed = await showConfirm('Delete this SMART goal?', 'Delete Goal');
-  if (!isConfirmed) return;
-  await remove('smart_goals', editingSmartId);
-  closeSmartModal();
-  await loadSmartGoals();
-}
-
-// Smart image upload
-btnSmartImgUpload.addEventListener('click', () => smartImgFile.click());
-smartImgFile.addEventListener('change', async () => {
-  const file = smartImgFile.files[0];
-  if (!file) return;
-  try {
-    btnSmartImgUpload.textContent = 'Compressing…';
-    btnSmartImgUpload.disabled = true;
-    const base64 = await compressImage(file);
-    applySmartModalImage(base64);
-  } catch { showAlert('Failed to process image.', 'Upload Error'); }
-  finally {
-    btnSmartImgUpload.textContent = 'Upload image';
-    btnSmartImgUpload.disabled = false;
-    smartImgFile.value = '';
-  }
-});
-
-btnSmartImgRemove.addEventListener('click', () => applySmartModalImage(''));
-
-// Modal events
-smartAddCard.addEventListener('click', () => openSmartModal(null));
-smartAddCard.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSmartModal(null); }
-});
-smartModalClose.addEventListener('click', closeSmartModal);
-btnSmartCancel.addEventListener('click', closeSmartModal);
-btnSmartSave.addEventListener('click', saveSmartGoal);
-btnSmartDelete.addEventListener('click', deleteSmartGoal);
-smartModalOverlay.addEventListener('click', (e) => {
-  if (e.target === smartModalOverlay) closeSmartModal();
-});
-
-// ─── ══════════════════════════════════════════════════════════
-//     3. LONG & SHORT TERM GOALS
-// ══════════════════════════════════════════════════════════════
 
 const longGoalsList  = document.getElementById('long-goals-list');
 const shortGoalsList = document.getElementById('short-goals-list');
@@ -354,7 +167,7 @@ const shortGoalsEmpty= document.getElementById('short-goals-empty');
 const btnAddLong     = document.getElementById('btn-add-long');
 const btnAddShort    = document.getElementById('btn-add-short');
 
-// Goal modal
+// Goal modal (minimal, Title only)
 const goalModalOverlay = document.getElementById('goal-modal-overlay');
 const goalModalTitle   = document.getElementById('goal-modal-title');
 const goalModalClose   = document.getElementById('goal-modal-close');
@@ -362,86 +175,462 @@ const btnGoalCancel    = document.getElementById('btn-goal-cancel');
 const btnGoalSave      = document.getElementById('btn-goal-save');
 const btnGoalDelete    = document.getElementById('btn-goal-delete');
 const goalTitleInput   = document.getElementById('goal-title');
-const goalDescInput    = document.getElementById('goal-desc');
-const goalDateInput    = document.getElementById('goal-date');
+
+// Link Task Modal
+const linkTaskModalOverlay = document.getElementById('link-task-modal-overlay');
+const linkTaskModalClose   = document.getElementById('link-task-modal-close');
+const btnLinkTaskCancel    = document.getElementById('btn-link-task-cancel');
+const linkTaskSearch       = document.getElementById('link-task-search');
+const linkTaskList         = document.getElementById('link-task-list');
+
+// Link Goal Modal
+const linkGoalModalOverlay = document.getElementById('link-goal-modal-overlay');
+const linkGoalModalClose   = document.getElementById('link-goal-modal-close');
+const btnLinkGoalCancel    = document.getElementById('btn-link-goal-cancel');
+const linkGoalList         = document.getElementById('link-goal-list');
 
 let editingGoalId   = null;
-let editingGoalType = null; // 'long' | 'short'
+let editingGoalTimeframe = null; // 'longterm' | 'shortterm'
+let expandedGoalIds = new Set(); // tracks which cards are expanded
+let editingSmartGoalId = null; // tracks which goal currently has inline SMART form expanded
+let linkingGoalId = null; // tracks which goal is currently having tasks/goals linked
+let pendingParentGoalId = null; // tracks parentGoalId pre-fill during quick short-term goal add
+let quickAddFormGoalId = null; // tracks which goal currently has inline quick add task expanded
+let draggedGoalId = null; // tracks the goal being dragged
 
-async function loadGoals() {
-  const [longGoals, shortGoals] = await Promise.all([
-    getLongGoals(),
-    getShortGoals(),
-  ]);
-
-  renderGoalList(longGoals,  longGoalsList,  longGoalsEmpty,  'long');
-  renderGoalList(shortGoals, shortGoalsList, shortGoalsEmpty, 'short');
+async function fetchAllTasks() {
+  const allStorage = await chrome.storage.local.get(null);
+  const allTasks = [];
+  for (const key of Object.keys(allStorage)) {
+    if (key.startsWith('tasks_')) {
+      const date = key.slice('tasks_'.length);
+      const tasks = allStorage[key];
+      if (Array.isArray(tasks)) {
+        for (const t of tasks) {
+          allTasks.push({ ...t, date });
+        }
+      }
+    }
+  }
+  return allTasks;
 }
 
-function renderGoalList(goals, listEl, emptyEl, type) {
-  // Sort: active first, done at bottom
-  const active = goals.filter((g) => g.status !== 'done');
-  const done   = goals.filter((g) => g.status === 'done');
-  const sorted = [...active, ...done];
+function getCountdownText(targetDateStr) {
+  if (!targetDateStr) return '';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(targetDateStr + 'T00:00:00');
+  target.setHours(0, 0, 0, 0);
+  const diffTime = target - today;
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) {
+    return 'Target date is today!';
+  } else if (diffDays === 1) {
+    return '1 day left';
+  } else if (diffDays > 1) {
+    return `${diffDays} days left`;
+  } else {
+    return `Overdue by ${Math.abs(diffDays)} day${Math.abs(diffDays) !== 1 ? 's' : ''}`;
+  }
+}
 
-  if (sorted.length === 0) {
+async function loadGoals() {
+  const goals = await getGoals();
+  const allTasks = await fetchAllTasks();
+
+  const longTerm = goals.filter(g => g.timeframe === 'longterm');
+  const shortTerm = goals.filter(g => g.timeframe === 'shortterm');
+
+  renderGoalList(longTerm, longGoalsList, longGoalsEmpty, 'longterm', goals, allTasks);
+  renderGoalList(shortTerm, shortGoalsList, shortGoalsEmpty, 'shortterm', goals, allTasks);
+}
+
+function renderGoalList(goals, listEl, emptyEl, timeframe, allGoals, allTasks) {
+  if (goals.length === 0) {
     listEl.innerHTML = '';
     emptyEl.classList.remove('hidden');
     return;
   }
   emptyEl.classList.add('hidden');
 
-  listEl.innerHTML = sorted.map((g) => `
-    <div class="goal-item${g.status === 'done' ? ' is-done' : ''}" data-id="${g.id}" data-type="${type}">
-      <input type="checkbox" class="goal-item-check"
-             data-id="${g.id}" data-type="${type}"
-             ${g.status === 'done' ? 'checked' : ''} />
-      <div class="goal-item-body">
-        <div class="goal-item-title${g.status === 'done' ? ' done-text' : ''}">${escHtml(g.title)}</div>
-        ${g.targetDate ? `<div class="goal-item-date">${fmtDate(g.targetDate)}</div>` : ''}
-      </div>
-      <div class="goal-item-edit" data-id="${g.id}" data-type="${type}" title="Edit">
-        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-        </svg>
-      </div>
-    </div>
-  `).join('');
+  listEl.innerHTML = '';
 
-  // Bind checkboxes
-  listEl.querySelectorAll('.goal-item-check').forEach((cb) => {
-    cb.addEventListener('change', async () => {
-      const key  = cb.dataset.type === 'long' ? 'goals_long' : 'goals_short';
-      const status = cb.checked ? 'done' : 'active';
-      await update(key, cb.dataset.id, { status });
+  goals.forEach(g => {
+    const card = document.createElement('div');
+    const isExpanded = expandedGoalIds.has(g.id);
+    card.className = `goal-card fade-in ${isExpanded ? 'is-expanded' : ''}`;
+    card.dataset.id = g.id;
+
+    // Drag and drop setup for the card
+    card.draggable = true;
+    card.addEventListener('dragstart', (e) => {
+      draggedGoalId = g.id;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', g.id);
+      setTimeout(() => card.classList.add('is-dragging'), 0);
+    });
+    card.addEventListener('dragend', () => {
+      draggedGoalId = null;
+      card.classList.remove('is-dragging');
+      document.querySelectorAll('.goals-col').forEach(col => col.classList.remove('drag-over'));
+    });
+
+    const childGoals = timeframe === 'longterm' ? allGoals.filter(cg => cg.parentGoalId === g.id) : [];
+    const linkedTasks = allTasks.filter(t => t.linkedGoalId === g.id);
+
+    // Build SMART Section
+    let smartSectionHTML = '';
+    if (g.isSmart) {
+      smartSectionHTML = `
+        <span class="smart-badge" data-id="${g.id}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+          ✓ SMART
+        </span>
+      `;
+    } else {
+      smartSectionHTML = `<button class="btn-make-smart" data-id="${g.id}">Make it SMART</button>`;
+    }
+
+    // Build Countdown HTML
+    let countdownHTML = '';
+    if (g.isSmart && g.targetDate) {
+      countdownHTML = `
+        <div class="goal-countdown">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          ${getCountdownText(g.targetDate)}
+        </div>
+      `;
+    }
+
+    // Inline SMART form
+    const isSmartFormExpanded = editingSmartGoalId === g.id;
+    const inlineSmartFormHTML = `
+      <div class="smart-upgrade-form ${isSmartFormExpanded ? 'expanded' : ''}">
+        <div class="form-group">
+          <label class="label text-xs">Specific</label>
+          <textarea class="textarea textarea-sm smart-specific" style="font-size: 12px;" rows="2" placeholder="What exactly do you want to achieve?">${escHtml(g.specific || '')}</textarea>
+        </div>
+        <div class="form-group">
+          <label class="label text-xs">Measurable</label>
+          <textarea class="textarea textarea-sm smart-measurable" style="font-size: 12px;" rows="2" placeholder="How will you measure success?">${escHtml(g.measurable || '')}</textarea>
+        </div>
+        <div class="form-group">
+          <label class="label text-xs">Target Date</label>
+          <input type="date" class="input input-sm smart-date" style="font-size: 12px; height:28px;" value="${g.targetDate || ''}" />
+        </div>
+        <div class="flex gap-2 justify-end" style="margin-top: 8px;">
+          <button class="btn btn-secondary btn-sm btn-smart-skip" style="font-size: 11px; padding: 2px 8px; height:24px;" data-id="${g.id}">Cancel</button>
+          <button class="btn btn-primary btn-sm btn-smart-save" style="font-size: 11px; padding: 2px 8px; height:24px;" data-id="${g.id}">Save</button>
+        </div>
+      </div>
+    `;
+
+    // Tasks list HTML
+    let tasksListHTML = '';
+    if (linkedTasks.length > 0) {
+      tasksListHTML = `
+        <div class="goal-tasks-header">Linked Tasks</div>
+        <div class="goal-tasks-list">
+          ${linkedTasks.map(t => `
+            <div class="goal-task-item">
+              <input type="checkbox" class="goal-task-item-check" data-id="${t.id}" data-date="${t.date}" ${t.done ? 'checked' : ''} />
+              <span class="goal-task-item-title ${t.done ? 'is-done' : ''}">${escHtml(t.title)}</span>
+              <span class="text-xs text-muted" style="margin-left:auto;">${fmtDate(t.date)}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    } else {
+      tasksListHTML = `
+        <div class="goal-tasks-header">Linked Tasks</div>
+        <div style="font-size: 11px; color: var(--color-text-muted); font-style: italic; margin-bottom: 6px;">No linked tasks yet</div>
+      `;
+    }
+
+    // Child goals list (long-term only)
+    let childGoalsHTML = '';
+    if (timeframe === 'longterm') {
+      if (childGoals.length > 0) {
+        childGoalsHTML = `
+          <div class="goal-children-header">Linked Short-term Goals</div>
+          <div class="goal-children-list">
+            ${childGoals.map(cg => `
+              <div class="goal-child-item" data-id="${cg.id}">
+                <span>${escHtml(cg.title)}</span>
+                <span class="text-xs text-accent font-semibold">${cg.progress}% completed</span>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      } else {
+        childGoalsHTML = `
+          <div class="goal-children-header">Linked Short-term Goals</div>
+          <div style="font-size: 11px; color: var(--color-text-muted); font-style: italic; margin-bottom: 6px; padding-left: 8px;">No child goals linked</div>
+        `;
+      }
+    }
+
+    // Quick add task inline form
+    const isQuickAddExpanded = quickAddFormGoalId === g.id;
+    const quickAddTaskHTML = `
+      <div class="quick-add-task-form ${isQuickAddExpanded ? '' : 'hidden'}" style="margin-top: 8px;">
+        <input type="text" class="input input-sm quick-add-task-input flex-1" style="font-size: 12px; height:28px;" placeholder="Add planner task for today..." />
+        <button class="btn btn-primary btn-sm btn-quick-add-task-save" style="font-size: 11px; height:28px; line-height: 1;" data-id="${g.id}">Add</button>
+        <button class="btn btn-ghost btn-sm btn-quick-add-task-cancel" style="font-size: 11px; height:28px;" data-id="${g.id}">Cancel</button>
+      </div>
+    `;
+
+    card.innerHTML = `
+      <div class="goal-card-header">
+        <div class="goal-card-title-group" data-id="${g.id}">
+          <div class="goal-card-title">${escHtml(g.title)}</div>
+          <div class="goal-card-timeframe">${timeframe === 'longterm' ? 'Long-term Goal' : 'Short-term Goal'}</div>
+        </div>
+        <div class="flex items-center gap-2">
+          ${smartSectionHTML}
+          <div class="goal-item-edit" data-id="${g.id}" title="Edit goal">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="goal-progress-container">
+        <div class="goal-progress-label">
+          <span>${g.progress || 0}% Progress</span>
+          <span>${g.completedTaskCount || 0} of ${g.linkedTaskCount || 0} tasks completed</span>
+        </div>
+        <div class="goal-progress-track">
+          <div class="goal-progress-fill" style="width: ${g.progress || 0}%"></div>
+        </div>
+      </div>
+
+      ${countdownHTML}
+      ${inlineSmartFormHTML}
+
+      <div class="goal-card-details">
+        ${tasksListHTML}
+        ${quickAddTaskHTML}
+        ${childGoalsHTML}
+
+        <div class="goal-card-actions">
+          <button class="btn-card-action btn-link-task" data-id="${g.id}">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+            Link existing task
+          </button>
+          <button class="btn-card-action btn-quick-add-task" data-id="${g.id}">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            Quick add task
+          </button>
+          ${timeframe === 'longterm' ? `
+            <button class="btn-card-action btn-link-goal" data-id="${g.id}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+              </svg>
+              Link existing goal
+            </button>
+            <button class="btn-card-action btn-add-child-goal" data-id="${g.id}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Add short-term goal
+            </button>
+          ` : ''}
+        </div>
+      </div>
+    `;
+
+    // Bind Expand/Collapse Card details click on the Title/Timeframe area
+    card.querySelector('.goal-card-title-group').addEventListener('click', () => {
+      const gid = g.id;
+      if (expandedGoalIds.has(gid)) {
+        expandedGoalIds.delete(gid);
+      } else {
+        expandedGoalIds.add(gid);
+      }
+      loadGoals();
+    });
+
+    // Bind Make SMART button
+    const btnMakeSmart = card.querySelector('.btn-make-smart');
+    if (btnMakeSmart) {
+      btnMakeSmart.addEventListener('click', (e) => {
+        e.stopPropagation();
+        editingSmartGoalId = g.id;
+        loadGoals();
+      });
+    }
+
+    // Bind SMART badge edit click
+    const badgeSmart = card.querySelector('.smart-badge');
+    if (badgeSmart) {
+      badgeSmart.addEventListener('click', (e) => {
+        e.stopPropagation();
+        editingSmartGoalId = g.id;
+        loadGoals();
+      });
+    }
+
+    // Bind Inline SMART Save/Cancel
+    card.querySelector('.btn-smart-skip').addEventListener('click', (e) => {
+      e.stopPropagation();
+      editingSmartGoalId = null;
+      loadGoals();
+    });
+
+    card.querySelector('.btn-smart-save').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const specific = card.querySelector('.smart-specific').value.trim() || null;
+      const measurable = card.querySelector('.smart-measurable').value.trim() || null;
+      const targetDate = card.querySelector('.smart-date').value || null;
+
+      const auth = await get('firebase_auth');
+      const userId = auth?.localId || '';
+
+      const allGoals = await getGoals();
+      const idx = allGoals.findIndex(item => item.id === g.id);
+      if (idx !== -1) {
+        allGoals[idx].isSmart = true;
+        allGoals[idx].specific = specific;
+        allGoals[idx].measurable = measurable;
+        allGoals[idx].targetDate = targetDate;
+        allGoals[idx].updatedAt = new Date().toISOString();
+        await saveGoals(allGoals);
+        await recalculateGoalProgress(userId, g.id);
+      }
+      editingSmartGoalId = null;
       await loadGoals();
     });
-  });
 
-  // Bind edit buttons
-  listEl.querySelectorAll('.goal-item-edit').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const key   = btn.dataset.type === 'long' ? 'goals_long' : 'goals_short';
-      const goals = await get(key) ?? [];
-      const goal  = goals.find((g) => g.id === btn.dataset.id);
-      if (goal) openGoalModal(btn.dataset.type, goal);
+    // Bind task checklist toggles
+    card.querySelectorAll('.goal-task-item-check').forEach(cb => {
+      cb.addEventListener('change', async (e) => {
+        e.stopPropagation();
+        const date = cb.dataset.date;
+        const taskId = cb.dataset.id;
+        const done = cb.checked;
+        await updateTask(date, taskId, { done });
+        await loadGoals();
+      });
     });
+
+    // Bind Quick Add Task inline form toggle
+    card.querySelector('.btn-quick-add-task').addEventListener('click', (e) => {
+      e.stopPropagation();
+      quickAddFormGoalId = g.id;
+      expandedGoalIds.add(g.id); // Ensure details section is expanded too
+      loadGoals();
+    });
+
+    // Save Quick Add Task
+    const quickAddSaveBtn = card.querySelector('.btn-quick-add-task-save');
+    if (quickAddSaveBtn) {
+      quickAddSaveBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const input = card.querySelector('.quick-add-task-input');
+        const title = input.value.trim();
+        if (!title) { input.focus(); return; }
+
+        const today = todayKey();
+        const newTask = {
+          id: generateId(),
+          title,
+          done: false,
+          priority: 2,
+          timeEstimate: null,
+          category: 'Personal',
+          linkedGoalId: g.id
+        };
+
+        const auth = await get('firebase_auth');
+        const userId = auth?.localId || '';
+
+        await addTask(today, newTask);
+        await recalculateGoalProgress(userId, g.id);
+        
+        quickAddFormGoalId = null;
+        await loadGoals();
+      });
+    }
+
+    // Cancel Quick Add Task
+    const quickAddCancelBtn = card.querySelector('.btn-quick-add-task-cancel');
+    if (quickAddCancelBtn) {
+      quickAddCancelBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        quickAddFormGoalId = null;
+        loadGoals();
+      });
+    }
+
+    // Bind Link Task button modal trigger
+    card.querySelector('.btn-link-task').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openLinkTaskModal(g.id, allTasks);
+    });
+
+    // Bind Edit Goal title/delete trigger
+    card.querySelector('.goal-item-edit').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openGoalModal(g.timeframe, g);
+    });
+
+    // Bind Long-term specific button actions
+    if (timeframe === 'longterm') {
+      // Link short-term goal button
+      card.querySelector('.btn-link-goal').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openLinkGoalModal(g.id, allGoals);
+      });
+
+      // Add short-term goal shortcut button
+      card.querySelector('.btn-add-child-goal').addEventListener('click', (e) => {
+        e.stopPropagation();
+        pendingParentGoalId = g.id;
+        openGoalModal('shortterm', null);
+      });
+
+      // Bind nested child goals clicks to navigate/expand them
+      card.querySelectorAll('.goal-child-item').forEach(childEl => {
+        childEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const childId = childEl.dataset.id;
+          expandedGoalIds.add(childId); // Expand the card
+          // Scroll to it
+          const targetCard = document.querySelector(`.goal-card[data-id="${childId}"]`);
+          if (targetCard) {
+            targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            targetCard.classList.add('highlight-glow');
+            setTimeout(() => targetCard.classList.remove('highlight-glow'), 2000);
+          }
+        });
+      });
+    }
+
+    listEl.appendChild(card);
   });
 }
 
-function openGoalModal(type, goal = null) {
-  editingGoalType = type;
-  editingGoalId   = goal?.id ?? null;
+function openGoalModal(timeframe, goal = null) {
+  editingGoalId = goal ? goal.id : null;
+  editingGoalTimeframe = timeframe;
 
-  const label = type === 'long' ? 'Long-term' : 'Short-term';
+  const label = timeframe === 'longterm' ? 'Long-term' : 'Short-term';
   goalModalTitle.textContent = goal ? `Edit ${label} Goal` : `Add ${label} Goal`;
-
-  goalTitleInput.value = goal?.title       ?? '';
-  goalDescInput.value  = goal?.description ?? '';
-  goalDateInput.value  = goal?.targetDate  ?? '';
+  goalTitleInput.value = goal?.title ?? '';
 
   btnGoalDelete.classList.toggle('hidden', !goal);
   goalModalOverlay.classList.remove('hidden');
@@ -450,30 +639,50 @@ function openGoalModal(type, goal = null) {
 
 function closeGoalModal() {
   goalModalOverlay.classList.add('hidden');
-  editingGoalId   = null;
-  editingGoalType = null;
+  editingGoalId = null;
+  editingGoalTimeframe = null;
+  pendingParentGoalId = null;
 }
 
 async function saveGoal() {
   const title = goalTitleInput.value.trim();
   if (!title) { goalTitleInput.focus(); return; }
 
-  const key = editingGoalType === 'long' ? 'goals_long' : 'goals_short';
+  const auth = await get('firebase_auth');
+  const userId = auth?.localId || '';
 
-  const payload = {
-    title,
-    description: goalDescInput.value.trim(),
-    targetDate:  goalDateInput.value,
-  };
+  const allGoals = await getGoals();
 
   if (editingGoalId) {
-    await update(key, editingGoalId, payload);
+    const idx = allGoals.findIndex(g => g.id === editingGoalId);
+    if (idx !== -1) {
+      allGoals[idx].title = title;
+      allGoals[idx].updatedAt = new Date().toISOString();
+      await saveGoals(allGoals);
+    }
   } else {
-    await push(key, {
+    const newGoal = {
       id: generateId(),
-      status: 'active',
-      ...payload,
-    });
+      userId: userId,
+      title,
+      timeframe: editingGoalTimeframe,
+      isSmart: false,
+      specific: null,
+      measurable: null,
+      targetDate: null,
+      parentGoalId: pendingParentGoalId || null,
+      progress: 0,
+      linkedTaskCount: 0,
+      completedTaskCount: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    allGoals.push(newGoal);
+    await saveGoals(allGoals);
+
+    if (newGoal.parentGoalId) {
+      await recalculateParentProgress(userId, newGoal.parentGoalId);
+    }
   }
 
   closeGoalModal();
@@ -481,55 +690,266 @@ async function saveGoal() {
 }
 
 async function deleteGoal() {
-  if (!editingGoalId || !editingGoalType) return;
-  const isConfirmed = await showConfirm('Delete this goal?', 'Delete Goal');
+  if (!editingGoalId) return;
+  const isConfirmed = await showConfirm('Delete this goal? Linked tasks will remain but will be unlinked.', 'Delete Goal');
   if (!isConfirmed) return;
-  const key = editingGoalType === 'long' ? 'goals_long' : 'goals_short';
-  await remove(key, editingGoalId);
+
+  const auth = await get('firebase_auth');
+  const userId = auth?.localId || '';
+
+  const allGoals = await getGoals();
+  const deletedGoal = allGoals.find(g => g.id === editingGoalId);
+  const filtered = allGoals.filter(g => g.id !== editingGoalId);
+
+  // If deleting a shortterm goal that has a parent, recalculate parent progress
+  const parentId = deletedGoal?.parentGoalId;
+
+  // Unlink parent Goal IDs of child goals if deleting parent
+  filtered.forEach(g => {
+    if (g.parentGoalId === editingGoalId) {
+      g.parentGoalId = null;
+    }
+  });
+
+  await saveGoals(filtered);
+
+  // Unlink tasks linked to this goal
+  const allStorage = await chrome.storage.local.get(null);
+  for (const key of Object.keys(allStorage)) {
+    if (key.startsWith('tasks_')) {
+      const tasks = allStorage[key];
+      if (Array.isArray(tasks)) {
+        let changed = false;
+        tasks.forEach(t => {
+          if (t.linkedGoalId === editingGoalId) {
+            t.linkedGoalId = null;
+            changed = true;
+          }
+        });
+        if (changed) {
+          await chrome.storage.local.set({ [key]: tasks });
+        }
+      }
+    }
+  }
+
+  if (parentId) {
+    await recalculateParentProgress(userId, parentId);
+  }
+
   closeGoalModal();
   await loadGoals();
 }
 
-// Goal modal event bindings
-btnAddLong.addEventListener('click',  () => openGoalModal('long'));
-btnAddShort.addEventListener('click', () => openGoalModal('short'));
+// ── Link Task Modal ──────────────────────────────────────────────────────────
+async function openLinkTaskModal(goalId, allTasks) {
+  linkingGoalId = goalId;
+  linkTaskSearch.value = '';
+  linkTaskModalOverlay.classList.remove('hidden');
+
+  const renderTasksList = (filterText = '') => {
+    const query = filterText.toLowerCase();
+    const unlinked = allTasks.filter(t => !t.linkedGoalId && escHtml(t.title).toLowerCase().includes(query));
+
+    if (unlinked.length === 0) {
+      linkTaskList.innerHTML = '<div style="font-size:12px;color:var(--color-text-muted);text-align:center;padding:10px;">No unlinked tasks found.</div>';
+      return;
+    }
+
+    linkTaskList.innerHTML = unlinked.map(t => `
+      <div class="goal-child-item" data-id="${t.id}" data-date="${t.date}">
+        <span>${escHtml(t.title)}</span>
+        <span class="text-xs text-muted">${fmtDate(t.date)}</span>
+      </div>
+    `).join('');
+
+    linkTaskList.querySelectorAll('.goal-child-item').forEach(el => {
+      el.addEventListener('click', async () => {
+        const taskId = el.dataset.id;
+        const taskDate = el.dataset.date;
+
+        const auth = await get('firebase_auth');
+        const userId = auth?.localId || '';
+
+        await updateTask(taskDate, taskId, { linkedGoalId: linkingGoalId });
+        await recalculateGoalProgress(userId, linkingGoalId);
+
+        closeLinkTaskModal();
+        await loadGoals();
+      });
+    });
+  };
+
+  renderTasksList();
+
+  linkTaskSearch.oninput = () => {
+    renderTasksList(linkTaskSearch.value);
+  };
+}
+
+function closeLinkTaskModal() {
+  linkTaskModalOverlay.classList.add('hidden');
+  linkingGoalId = null;
+}
+
+// ── Link Goal Modal ──────────────────────────────────────────────────────────
+async function openLinkGoalModal(parentGoalId, allGoals) {
+  linkingGoalId = parentGoalId;
+  linkGoalModalOverlay.classList.remove('hidden');
+
+  const unlinkedShortTerm = allGoals.filter(g => g.timeframe === 'shortterm' && !g.parentGoalId);
+
+  if (unlinkedShortTerm.length === 0) {
+    linkGoalList.innerHTML = '<div style="font-size:12px;color:var(--color-text-muted);text-align:center;padding:10px;">No unlinked short-term goals found.</div>';
+    return;
+  }
+
+  linkGoalList.innerHTML = unlinkedShortTerm.map(g => `
+    <div class="goal-child-item" data-id="${g.id}">
+      <span>${escHtml(g.title)}</span>
+      <span class="text-xs text-accent">${g.progress}% completed</span>
+    </div>
+  `).join('');
+
+  linkGoalList.querySelectorAll('.goal-child-item').forEach(el => {
+    el.addEventListener('click', async () => {
+      const childGoalId = el.dataset.id;
+
+      const auth = await get('firebase_auth');
+      const userId = auth?.localId || '';
+
+      const goalsList = await getGoals();
+      const childIdx = goalsList.findIndex(item => item.id === childGoalId);
+      if (childIdx !== -1) {
+        goalsList[childIdx].parentGoalId = linkingGoalId;
+        goalsList[childIdx].updatedAt = new Date().toISOString();
+        await saveGoals(goalsList);
+        await recalculateParentProgress(userId, linkingGoalId);
+      }
+
+      closeLinkGoalModal();
+      await loadGoals();
+    });
+  });
+}
+
+function closeLinkGoalModal() {
+  linkGoalModalOverlay.classList.add('hidden');
+  linkingGoalId = null;
+}
+
+// Event Bindings
+btnAddLong.addEventListener('click',  () => openGoalModal('longterm'));
+btnAddShort.addEventListener('click', () => openGoalModal('shortterm'));
 goalModalClose.addEventListener('click', closeGoalModal);
 btnGoalCancel.addEventListener('click', closeGoalModal);
 btnGoalSave.addEventListener('click', saveGoal);
 btnGoalDelete.addEventListener('click', deleteGoal);
+
 goalModalOverlay.addEventListener('click', (e) => {
   if (e.target === goalModalOverlay) closeGoalModal();
 });
 
-// Enter to save in goal modal
-[goalTitleInput, goalDescInput, goalDateInput].forEach((el) => {
-  el.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveGoal(); }
-  });
+// Link Task Bindings
+linkTaskModalClose.addEventListener('click', closeLinkTaskModal);
+btnLinkTaskCancel.addEventListener('click', closeLinkTaskModal);
+linkTaskModalOverlay.addEventListener('click', (e) => {
+  if (e.target === linkTaskModalOverlay) closeLinkTaskModal();
 });
 
-// Enter to save in smart modal (only in text fields)
-[smartTitle, smartDate].forEach((el) => {
-  el.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); saveSmartGoal(); }
-  });
+// Link Goal Bindings
+linkGoalModalClose.addEventListener('click', closeLinkGoalModal);
+btnLinkGoalCancel.addEventListener('click', closeLinkGoalModal);
+linkGoalModalOverlay.addEventListener('click', (e) => {
+  if (e.target === linkGoalModalOverlay) closeLinkGoalModal();
+});
+
+// Enter to save inside goal modal
+goalTitleInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); saveGoal(); }
 });
 
 // Escape closes modals
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (!smartModalOverlay.classList.contains('hidden')) closeSmartModal();
-    if (!goalModalOverlay.classList.contains('hidden'))  closeGoalModal();
+    if (!goalModalOverlay.classList.contains('hidden')) closeGoalModal();
+    if (!linkTaskModalOverlay.classList.contains('hidden')) closeLinkTaskModal();
+    if (!linkGoalModalOverlay.classList.contains('hidden')) closeLinkGoalModal();
   }
 });
 
+// ── Drag and Drop Setup ────────────────────────────────────────────────────────
+function setupDragAndDrop() {
+  const cols = document.querySelectorAll('.goals-col');
+  cols.forEach(col => {
+    col.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      if (draggedGoalId) {
+        col.classList.add('drag-over');
+      }
+    });
+    col.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (draggedGoalId) {
+        e.dataTransfer.dropEffect = 'move';
+        col.classList.add('drag-over');
+      }
+    });
+    col.addEventListener('dragleave', (e) => {
+      if (!col.contains(e.relatedTarget)) {
+        col.classList.remove('drag-over');
+      }
+    });
+    col.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      
+      const targetGoalId = e.dataTransfer.getData('text/plain') || draggedGoalId;
+      if (!targetGoalId) return;
+
+      const isLongTermCol = col.querySelector('#long-goals-list') !== null;
+      const newTimeframe = isLongTermCol ? 'longterm' : 'shortterm';
+      
+      const allGoals = await getGoals();
+      const goalIndex = allGoals.findIndex(g => g.id === targetGoalId);
+      
+      if (goalIndex !== -1 && allGoals[goalIndex].timeframe !== newTimeframe) {
+        const auth = await get('firebase_auth');
+        const userId = auth?.localId || '';
+        const oldParentId = allGoals[goalIndex].parentGoalId;
+
+        allGoals[goalIndex].timeframe = newTimeframe;
+        allGoals[goalIndex].updatedAt = new Date().toISOString();
+        
+        if (newTimeframe === 'longterm') {
+          allGoals[goalIndex].parentGoalId = null;
+        } else {
+          allGoals.forEach(g => {
+            if (g.parentGoalId === targetGoalId) {
+              g.parentGoalId = null;
+            }
+          });
+        }
+        
+        await saveGoals(allGoals);
+        if (oldParentId) {
+          await recalculateParentProgress(userId, oldParentId);
+        }
+        await loadGoals();
+      }
+    });
+  });
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
+  await runGoalsMigration();
   await Promise.all([
     loadVision(),
-    loadSmartGoals(),
     loadGoals(),
   ]);
+
+  setupDragAndDrop();
 
   // Initialize automatic synchronization
   initAutoSync();
@@ -540,15 +960,13 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   const keys = Object.keys(changes);
   const hasVisionChanges = keys.some(key => 
     key === 'vision' ||
-    key === 'smart_goals' ||
-    key === 'long_goals' ||
-    key === 'short_goals' ||
+    key === 'goals' ||
+    key.startsWith('tasks_') ||
     key === 'yearly_themes'
   );
   if (hasVisionChanges) {
     await Promise.all([
       loadVision(),
-      loadSmartGoals(),
       loadGoals(),
     ]);
   }

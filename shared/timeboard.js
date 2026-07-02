@@ -20,9 +20,9 @@ import {
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const BOARD_START = 6;    // 6 AM
-const BOARD_END   = 23;   // 11 PM
+const BOARD_END   = 24;   // 12 AM (Midnight)
 const PX_PER_HOUR = 48;   // pixels per hour
-const TOTAL_HOURS = BOARD_END - BOARD_START; // 17
+const TOTAL_HOURS = BOARD_END - BOARD_START; // 18
 
 export function getCategoryColor(cat) {
   const palettes = [
@@ -145,7 +145,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   function updateNowLine() {
     const now   = new Date();
     const h     = now.getHours() + now.getMinutes() / 60;
-    const today = now.toISOString().slice(0, 10);
+    const today = todayKey();
     if (date === today && h >= BOARD_START && h <= BOARD_END) {
       nowLineEl.style.top     = hourToPx(h) + 'px';
       nowLineEl.style.display = 'block';

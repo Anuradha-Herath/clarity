@@ -4,7 +4,7 @@
  * ES Module.
  */
 
-import { get, set, push, generateId, todayKey, getTasks, getBlocks, updateTask, formatHour, initAutoSync } from '../shared/storage.js';
+import { get, set, push, generateId, todayKey, dateKey, getTasks, getBlocks, updateTask, formatHour, initAutoSync } from '../shared/storage.js';
 import { showConfirm, showAlert } from '../shared/dialog.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -432,9 +432,7 @@ async function renderLog() {
   if (logFilter === 'today') {
     filtered = allLogs.filter((l) => l.date === todayStr);
   } else if (logFilter === 'week') {
-    const weekAgo = new Date(now);
-    weekAgo.setDate(weekAgo.getDate() - 6);
-    const weekAgoStr = weekAgo.toISOString().slice(0, 10);
+    const weekAgoStr = dateKey(-6);
     filtered = allLogs.filter((l) => l.date >= weekAgoStr);
   } else {
     filtered = [...allLogs];
