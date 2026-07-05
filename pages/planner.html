@@ -110,6 +110,25 @@
             </div>
           </div>
 
+          <!-- Today's Habits Widget -->
+          <div class="card mb-4" id="day-habits-card" style="display: none;">
+            <div class="card-header">
+              <div class="card-title" style="gap:6px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-success)">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                Today's Habits
+              </div>
+              <span class="text-xs text-muted" id="day-habits-count">0/0</span>
+            </div>
+            <div class="card-body p-0">
+              <div id="day-habits-list" style="display: flex; flex-direction: column; padding: 4px 8px;">
+                <!-- Dynamically populated via planner.js -->
+              </div>
+            </div>
+          </div>
+
           <!-- Top 3 Priorities -->
           <div class="card mb-4">
             <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
@@ -415,6 +434,30 @@
           <div class="form-group">
             <label class="label" for="task-estimate-input">Est. (minutes)</label>
             <input type="number" id="task-estimate-input" class="input" min="5" max="480" step="5" placeholder="30" />
+          </div>
+        </div>
+        <!-- Repeat Options -->
+        <div class="form-group" style="margin-top:4px; padding-top:12px; border-top:1px solid var(--color-border);">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:var(--color-text);">
+            <input type="checkbox" id="task-repeat-toggle" style="accent-color:var(--color-primary); width:15px; height:15px; cursor:pointer;" />
+            Repeat this task
+          </label>
+          <div id="task-repeat-settings" style="display:none; margin-top:10px; flex-direction:column; gap:10px;">
+            <select id="task-repeat-pattern" class="select" style="font-size:13px;">
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays (Mon-Fri)</option>
+              <option value="weekends">Weekends (Sat-Sun)</option>
+              <option value="custom">Custom days...</option>
+            </select>
+            <div id="task-repeat-custom" style="display:none; gap:6px; flex-wrap:wrap;">
+              <button data-day="1" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Mon</button>
+              <button data-day="2" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Tue</button>
+              <button data-day="3" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Wed</button>
+              <button data-day="4" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Thu</button>
+              <button data-day="5" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Fri</button>
+              <button data-day="6" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Sat</button>
+              <button data-day="0" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Sun</button>
+            </div>
           </div>
         </div>
         <div class="form-group" style="margin-top: 12px; border-top: 1px solid var(--color-border); padding-top: 12px;">

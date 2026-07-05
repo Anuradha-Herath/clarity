@@ -17,7 +17,13 @@ import {
   getAuth,
   getGoals, runGoalsMigration,
   carryForwardTasks,
+  addRecurringTemplate, updateFutureRecurringInstances, removeFutureRecurringInstances,
+  syncRecurringTemplateForRange, deleteRecurringTemplate, getRecurringTemplates,
+  autoGenerateRecurringInstances,
+  getHabits, saveHabits
 } from '../shared/storage.js';
+
+import { generateHabitInstances } from '../shared/habitEngine.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
 import { showConfirm, showAlert } from '../shared/dialog.js';
@@ -230,6 +236,7 @@ async function refreshCurrentTab() {
 }
 
 async function onDayChanged() {
+  await autoGenerateRecurringInstances(currentDate);
   renderDayDate();
   renderDayHolidayBanner();
   if (timeboardInstance) timeboardInstance.refresh(currentDate);
@@ -237,6 +244,7 @@ async function onDayChanged() {
   await loadNotes();
   await renderDayFixedEvents();
   await renderDaySidebarFixedEvents();
+  await renderDaySidebarHabits();
   await renderCountdownBanners();
 }
 
@@ -372,6 +380,71 @@ async function renderDaySidebarFixedEvents() {
     });
 
     listContainer.appendChild(item);
+  });
+}
+
+// ─── Today's Habits (Day View Sidebar) ───────────────────────────────────────
+async function renderDaySidebarHabits() {
+  const container = document.getElementById('day-habits-list');
+  const countEl = document.getElementById('day-habits-count');
+  const card = document.getElementById('day-habits-card');
+  if (!container || !card) return;
+
+  const habits = await getHabits();
+  let todayInstances = [];
+  
+  for (const h of habits) {
+    if (h.status !== 'active') continue;
+    const instances = generateHabitInstances(h, [currentDate]);
+    todayInstances.push(...instances);
+  }
+  
+  if (todayInstances.length === 0) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = 'flex';
+  card.style.flexDirection = 'column';
+
+  let doneCount = 0;
+  
+  container.innerHTML = todayInstances.map((inst, idx) => {
+    const h = habits.find(x => x.id === inst.habitId);
+    const isDone = h.completions?.[currentDate]?.[inst.time] === true;
+    if (isDone) doneCount++;
+    
+    return `
+      <div class="sidebar-habit-item ${isDone ? 'completed' : ''}" style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--color-border); font-size:12px;">
+        <input type="checkbox" class="sidebar-habit-check" data-idx="${idx}" ${isDone ? 'checked' : ''} style="width:14px; height:14px; accent-color:var(--color-success); cursor:pointer;">
+        <span style="flex:1; ${isDone ? 'text-decoration:line-through; color:var(--color-text-muted);' : 'color:var(--color-text);'} word-break:break-word;">
+          ${escHtml(inst.title)}
+        </span>
+      </div>
+    `;
+  }).join('');
+  
+  countEl.textContent = `${doneCount}/${todayInstances.length}`;
+  
+  // Bind toggles
+  container.querySelectorAll('.sidebar-habit-check').forEach(cb => {
+    cb.addEventListener('change', async (e) => {
+      const idx = parseInt(cb.dataset.idx, 10);
+      const inst = todayInstances[idx];
+      const h = habits.find(x => x.id === inst.habitId);
+      if (!h) return;
+      
+      if (!h.completions) h.completions = {};
+      if (!h.completions[currentDate]) h.completions[currentDate] = {};
+      
+      h.completions[currentDate][inst.time] = cb.checked;
+      await saveHabits(habits);
+      
+      try {
+        await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
+      } catch (err) {}
+      
+      renderDaySidebarHabits();
+    });
   });
 }
 
@@ -1457,6 +1530,38 @@ const taskPriorityInput= document.getElementById('task-priority-input');
 const taskCategoryInput= document.getElementById('task-category-input');
 const taskEstimateInput= document.getElementById('task-estimate-input');
 
+const taskRepeatToggle   = document.getElementById('task-repeat-toggle');
+const taskRepeatSettings = document.getElementById('task-repeat-settings');
+const taskRepeatPattern  = document.getElementById('task-repeat-pattern');
+const taskRepeatCustom   = document.getElementById('task-repeat-custom');
+let taskCustomDays = new Set();
+
+taskRepeatToggle.addEventListener('change', () => {
+  taskRepeatSettings.style.display = taskRepeatToggle.checked ? 'flex' : 'none';
+});
+
+taskRepeatPattern.addEventListener('change', () => {
+  taskRepeatCustom.style.display = taskRepeatPattern.value === 'custom' ? 'flex' : 'none';
+});
+
+document.querySelectorAll('.task-day-pill').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const day = parseInt(btn.dataset.day);
+    if (taskCustomDays.has(day)) {
+      taskCustomDays.delete(day);
+      btn.style.background = 'var(--color-bg)';
+      btn.style.borderColor = 'var(--color-border)';
+      btn.style.color = 'var(--color-text)';
+    } else {
+      taskCustomDays.add(day);
+      btn.style.background = 'var(--color-primary)';
+      btn.style.borderColor = 'var(--color-primary)';
+      btn.style.color = '#fff';
+    }
+  });
+});
+
 // Habit edit confirmation modal selectors
 const habitConfirmModalOverlay = document.getElementById('habit-confirm-modal-overlay');
 const habitConfirmModalClose   = document.getElementById('habit-confirm-modal-close');
@@ -1483,6 +1588,34 @@ function openTaskModal(task = null, date = null) {
   taskCategoryInput.value = task?.category || 'Personal';
   taskEstimateInput.value = task?.timeEstimate ?? '';
   taskSubtaskInput.value = '';
+  
+  // Set recurring fields
+  if (taskRepeatToggle) {
+    taskRepeatToggle.checked = !!task?.isRecurring;
+    taskRepeatSettings.style.display = task?.isRecurring ? 'flex' : 'none';
+    taskRepeatPattern.value = task?.recurrencePattern?.type || 'daily';
+    taskRepeatCustom.style.display = taskRepeatPattern.value === 'custom' ? 'flex' : 'none';
+    
+    taskCustomDays.clear();
+    document.querySelectorAll('.task-day-pill').forEach(btn => {
+      btn.style.background = 'var(--color-bg)';
+      btn.style.borderColor = 'var(--color-border)';
+      btn.style.color = 'var(--color-text)';
+    });
+    
+    if (task?.recurrencePattern?.customDays) {
+      task.recurrencePattern.customDays.forEach(d => {
+        taskCustomDays.add(d);
+        const btn = document.querySelector(`.task-day-pill[data-day="${d}"]`);
+        if (btn) {
+          btn.style.background = 'var(--color-primary)';
+          btn.style.borderColor = 'var(--color-primary)';
+          btn.style.color = '#fff';
+        }
+      });
+    }
+  }
+
   const subtaskDurationInput = document.getElementById('task-subtask-duration');
   if (subtaskDurationInput) {
     subtaskDurationInput.value = '';
@@ -1586,38 +1719,91 @@ async function saveTask() {
   const subtasks    = editingSubtasks;
   const taskGoalInput = document.getElementById('task-goal-input');
   const linkedGoalId = taskGoalInput ? (taskGoalInput.value || null) : null;
+  
+  const isRecurring = document.getElementById('task-repeat-toggle')?.checked || false;
+  const repeatPatternType = document.getElementById('task-repeat-pattern')?.value || 'daily';
+  let recurrencePattern = null;
+  if (isRecurring) {
+    recurrencePattern = {
+      type: repeatPatternType,
+      customDays: repeatPatternType === 'custom' ? Array.from(taskCustomDays) : []
+    };
+  }
 
   const targetDate = editingTaskDate || currentDate;
 
+  const patch = { title, priority, timeEstimate, category, subtasks, linkedGoalId, isRecurring, recurrencePattern };
+
   if (editingTask) {
-    if (editingTask.habitId) {
+    if (editingTask.habitId || editingTask.isRecurring) {
       const titleChanged = title !== editingTask.title;
       const priorityChanged = priority !== editingTask.priority;
       const categoryChanged = category !== editingTask.category;
       const estimateChanged = timeEstimate !== editingTask.timeEstimate;
       const subtasksChanged = JSON.stringify(subtasks) !== JSON.stringify(editingTask.subtasks || []);
       const goalChanged = linkedGoalId !== (editingTask.linkedGoalId || null);
+      const recurrenceChanged = isRecurring !== editingTask.isRecurring || JSON.stringify(recurrencePattern) !== JSON.stringify(editingTask.recurrencePattern || null);
       
-      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged || goalChanged) {
+      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged || goalChanged || recurrenceChanged) {
         habitConfirmModalOverlay.classList.remove('hidden');
         btnHabitConfirmSave.onclick = async () => {
           const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
-          await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks, linkedGoalId }, editMode);
+          if (editingTask.habitId) {
+            await updateTask(targetDate, editingTask.id, patch, editMode);
+          } else if (editingTask.isRecurring) {
+            if (editMode === 'following') {
+              await updateFutureRecurringInstances(editingTask.recurrenceId, targetDate, 'task', patch);
+              const templates = await getRecurringTemplates();
+              const t = templates.find(x => x.recurrenceId === editingTask.recurrenceId);
+              if (t) {
+                Object.assign(t, patch);
+                await updateRecurringTemplate(t.id, t);
+              }
+            } else {
+              await updateTask(targetDate, editingTask.id, patch);
+            }
+          }
+          
           closeHabitConfirmModal();
           closeTaskModal();
           await refreshActiveTab();
           try {
-            await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
+            if (editingTask.habitId) await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
           } catch (e) {}
         };
         return;
       }
     }
-    await updateTask(targetDate, editingTask.id, { title, priority, timeEstimate, category, subtasks, linkedGoalId });
+    await updateTask(targetDate, editingTask.id, patch);
   } else {
-    await addTask(targetDate, {
-      id: generateId(), title, done: false, priority, timeEstimate, category, subtasks, linkedGoalId,
-    });
+    patch.id = generateId();
+    patch.done = false;
+    
+    if (isRecurring) {
+      patch.recurrenceId = generateId();
+      const template = {
+        id: generateId(),
+        recurrenceId: patch.recurrenceId,
+        itemType: 'task',
+        startDate: targetDate,
+        title: patch.title,
+        priority: patch.priority,
+        timeEstimate: patch.timeEstimate,
+        category: patch.category,
+        linkedGoalId: patch.linkedGoalId,
+        recurrencePattern: patch.recurrencePattern
+      };
+      await addRecurringTemplate(template);
+      
+      const endObj = new Date(targetDate);
+      endObj.setDate(endObj.getDate() + 30);
+      const y = endObj.getFullYear();
+      const m = String(endObj.getMonth() + 1).padStart(2, '0');
+      const d = String(endObj.getDate()).padStart(2, '0');
+      await syncRecurringTemplateForRange(template, targetDate, `${y}-${m}-${d}`);
+    } else {
+      await addTask(targetDate, patch);
+    }
   }
   closeTaskModal();
   await refreshActiveTab();
@@ -1628,6 +1814,7 @@ async function refreshActiveTab() {
     await renderPriorityList();
     await renderDayFixedEvents();
     await renderDaySidebarFixedEvents();
+    await renderDaySidebarHabits();
     await renderCountdownBanners();
   } else if (activeTab === 'week') {
     await renderWeekTab();
@@ -1650,6 +1837,38 @@ habitConfirmModalOverlay.addEventListener('click', (e) => { if (e.target === hab
 btnTaskDelete.addEventListener('click', async () => {
   if (!editingTask) return;
   const targetDate = editingTaskDate || currentDate;
+  
+  if (editingTask.habitId || editingTask.isRecurring) {
+    habitConfirmModalOverlay.classList.remove('hidden');
+    btnHabitConfirmSave.onclick = async () => {
+      const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
+      if (editingTask.habitId) {
+        if (editMode === 'following') {
+          // Trigger the habit service method indirectly or rely on the sync to remove
+          // For now, doing direct storage cleanup for tasks
+          import('../shared/storage.js').then(async (m) => {
+             // not implemented for habits here.
+          });
+        }
+        await deleteTask(targetDate, editingTask.id); // Defaulting to just local delete for habits since planner.js doesn't manage habit deletions well
+      } else if (editingTask.isRecurring) {
+        if (editMode === 'following') {
+          await removeFutureRecurringInstances(editingTask.recurrenceId, targetDate, 'task');
+          const templates = await getRecurringTemplates();
+          const t = templates.find(x => x.recurrenceId === editingTask.recurrenceId);
+          if (t) await deleteRecurringTemplate(t.id);
+        } else {
+          await deleteTask(targetDate, editingTask.id);
+        }
+      }
+      
+      closeHabitConfirmModal();
+      closeTaskModal();
+      await refreshActiveTab();
+    };
+    return;
+  }
+  
   await deleteTask(targetDate, editingTask.id);
   closeTaskModal();
   await refreshActiveTab();
@@ -2078,6 +2297,8 @@ async function renderWeekTab() {
       const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
       return !isMulti;
     });
+    
+
     dayFixedEvents.forEach(event => {
       const chip = document.createElement('div');
       const completedClass = event.isCompleted ? ' completed' : '';

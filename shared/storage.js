@@ -47,7 +47,8 @@ const DEFAULTS = {
     updatedAt: 0
   },
   rewardSessions: [],
-  activeRewardSession: null
+  activeRewardSession: null,
+  recurring_templates: []
 };
 
 // ─── ID generator ──────────────────────────────────────────────────────────────
@@ -1900,5 +1901,200 @@ export async function removeFutureHabitInstances(habitId, fromDate) {
   }
 }
 
+// ─── Recurring Templates helpers ───────────────────────────────────────────────
 
+export async function getRecurringTemplates() {
+  return (await get('recurring_templates')) ?? [];
+}
 
+export async function saveRecurringTemplates(templates) {
+  await set('recurring_templates', templates);
+}
+
+export async function addRecurringTemplate(template) {
+  await push('recurring_templates', template);
+}
+
+export async function updateRecurringTemplate(id, patch) {
+  await update('recurring_templates', id, patch);
+}
+
+export async function deleteRecurringTemplate(id) {
+  await remove('recurring_templates', id);
+}
+
+/**
+ * Checks if a given date matches a recurrence pattern.
+ * @param {Date} dateObj
+ * @param {object} pattern { type: 'daily'|'weekdays'|'weekends'|'custom', customDays: number[] }
+ */
+export function matchesRecurrencePattern(dateObj, pattern) {
+  if (!pattern) return false;
+  const day = dateObj.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+  switch (pattern.type) {
+    case 'daily': return true;
+    case 'weekdays': return day >= 1 && day <= 5;
+    case 'weekends': return day === 0 || day === 6;
+    case 'custom': return Array.isArray(pattern.customDays) && pattern.customDays.includes(day);
+    default: return false;
+  }
+}
+
+/**
+ * Generate instances for a template between startDate and endDate.
+ */
+export async function syncRecurringTemplateForRange(template, startDate, endDate) {
+  const dates = [];
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const cur = new Date(sy, sm - 1, sd);
+  const [ey, em, ed] = endDate.split('-').map(Number);
+  const end = new Date(ey, em - 1, ed);
+
+  while (cur <= end) {
+    const y = cur.getFullYear();
+    const m = String(cur.getMonth() + 1).padStart(2, '0');
+    const d = String(cur.getDate()).padStart(2, '0');
+    const dateStr = `${y}-${m}-${d}`;
+
+    if (matchesRecurrencePattern(cur, template.recurrencePattern)) {
+      if (template.itemType === 'task') {
+        const tasks = await getTasks(dateStr);
+        const exists = tasks.some(t => t.recurrenceId === template.recurrenceId);
+        if (!exists) {
+          const newTask = {
+            id: generateId(),
+            title: template.title,
+            done: false,
+            priority: template.priority || 3,
+            timeEstimate: template.timeEstimate || 15,
+            category: template.category || 'Personal',
+            isRecurring: true,
+            recurrencePattern: template.recurrencePattern,
+            recurrenceId: template.recurrenceId
+          };
+          tasks.push(newTask);
+          await setTasks(dateStr, tasks);
+        }
+      } else if (template.itemType === 'block') {
+        const blocks = await getBlocks(dateStr);
+        const exists = blocks.some(b => b.recurrenceId === template.recurrenceId);
+        if (!exists) {
+          const newBlock = {
+            id: generateId(),
+            title: template.title,
+            cat: template.cat || 'Personal',
+            start: template.start,
+            end: template.end,
+            isRecurring: true,
+            recurrencePattern: template.recurrencePattern,
+            recurrenceId: template.recurrenceId,
+            isInfrastructure: template.isInfrastructure || false
+          };
+          blocks.push(newBlock);
+          await setBlocks(dateStr, blocks);
+        }
+      }
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+}
+
+/**
+ * Remove future recurring instances starting from a given date.
+ */
+export async function removeFutureRecurringInstances(recurrenceId, fromDate, itemType) {
+  try {
+    const allStorage = await chrome.storage.local.get(null);
+    for (const key of Object.keys(allStorage)) {
+      if (itemType === 'task' && key.startsWith('tasks_')) {
+        const datePart = key.slice('tasks_'.length);
+        if (datePart >= fromDate) {
+          const tasks = allStorage[key];
+          if (Array.isArray(tasks)) {
+            const filtered = tasks.filter(t => t.recurrenceId !== recurrenceId);
+            if (filtered.length !== tasks.length) {
+              await chrome.storage.local.set({ [key]: filtered });
+            }
+          }
+        }
+      }
+      if (itemType === 'block' && key.startsWith('blocks_')) {
+        const datePart = key.slice('blocks_'.length);
+        if (datePart >= fromDate) {
+          const blocks = allStorage[key];
+          if (Array.isArray(blocks)) {
+            const filtered = blocks.filter(b => b.recurrenceId !== recurrenceId);
+            if (filtered.length !== blocks.length) {
+              await chrome.storage.local.set({ [key]: filtered });
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Storage] Error removing future recurring instances:', err);
+  }
+}
+
+/**
+ * Update future recurring instances starting from a given date.
+ */
+export async function updateFutureRecurringInstances(recurrenceId, fromDate, itemType, patch) {
+  try {
+    const allStorage = await chrome.storage.local.get(null);
+    for (const key of Object.keys(allStorage)) {
+      if (itemType === 'task' && key.startsWith('tasks_')) {
+        const datePart = key.slice('tasks_'.length);
+        if (datePart >= fromDate) {
+          const tasks = allStorage[key];
+          if (Array.isArray(tasks)) {
+            let changed = false;
+            for (const t of tasks) {
+              if (t.recurrenceId === recurrenceId) {
+                Object.assign(t, patch);
+                changed = true;
+              }
+            }
+            if (changed) {
+              await chrome.storage.local.set({ [key]: tasks });
+            }
+          }
+        }
+      }
+      if (itemType === 'block' && key.startsWith('blocks_')) {
+        const datePart = key.slice('blocks_'.length);
+        if (datePart >= fromDate) {
+          const blocks = allStorage[key];
+          if (Array.isArray(blocks)) {
+            let changed = false;
+            for (const b of blocks) {
+              if (b.recurrenceId === recurrenceId) {
+                Object.assign(b, patch);
+                changed = true;
+              }
+            }
+            if (changed) {
+              await chrome.storage.local.set({ [key]: blocks });
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Storage] Error updating future recurring instances:', err);
+  }
+}
+
+/**
+ * Hook to run when navigating to a specific date to auto-generate missing instances.
+ */
+export async function autoGenerateRecurringInstances(dateStr) {
+  const templates = await getRecurringTemplates();
+  if (!templates || templates.length === 0) return;
+
+  for (const template of templates) {
+    if (!template.startDate || dateStr >= template.startDate) {
+      await syncRecurringTemplateForRange(template, dateStr, dateStr);
+    }
+  }
+}
