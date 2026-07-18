@@ -1529,6 +1529,7 @@ const taskTitleInput   = document.getElementById('task-title-input');
 const taskPriorityInput= document.getElementById('task-priority-input');
 const taskCategoryInput= document.getElementById('task-category-input');
 const taskEstimateInput= document.getElementById('task-estimate-input');
+const taskDateInput    = document.getElementById('task-date-input');
 
 const taskRepeatToggle   = document.getElementById('task-repeat-toggle');
 const taskRepeatSettings = document.getElementById('task-repeat-settings');
@@ -1588,6 +1589,9 @@ function openTaskModal(task = null, date = null) {
   taskCategoryInput.value = task?.category || 'Personal';
   taskEstimateInput.value = task?.timeEstimate ?? '';
   taskSubtaskInput.value = '';
+  if (taskDateInput) {
+    taskDateInput.value = editingTaskDate || currentDate;
+  }
   
   // Set recurring fields
   if (taskRepeatToggle) {
@@ -1731,6 +1735,7 @@ async function saveTask() {
   }
 
   const targetDate = editingTaskDate || currentDate;
+  const newDate = taskDateInput?.value || targetDate;
 
   const patch = { title, priority, timeEstimate, category, subtasks, linkedGoalId, isRecurring, recurrencePattern };
 
@@ -1743,8 +1748,9 @@ async function saveTask() {
       const subtasksChanged = JSON.stringify(subtasks) !== JSON.stringify(editingTask.subtasks || []);
       const goalChanged = linkedGoalId !== (editingTask.linkedGoalId || null);
       const recurrenceChanged = isRecurring !== editingTask.isRecurring || JSON.stringify(recurrencePattern) !== JSON.stringify(editingTask.recurrencePattern || null);
+      const dateChanged = newDate !== targetDate;
       
-      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged || goalChanged || recurrenceChanged) {
+      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged || goalChanged || recurrenceChanged || dateChanged) {
         habitConfirmModalOverlay.classList.remove('hidden');
         btnHabitConfirmSave.onclick = async () => {
           const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
@@ -1764,6 +1770,15 @@ async function saveTask() {
             }
           }
           
+          if (newDate !== targetDate) {
+            const allTasks = await getTasks(targetDate);
+            const updatedTask = allTasks.find(t => t.id === editingTask.id);
+            if (updatedTask) {
+              await deleteTask(targetDate, editingTask.id);
+              await addTask(newDate, updatedTask);
+            }
+          }
+          
           closeHabitConfirmModal();
           closeTaskModal();
           await refreshActiveTab();
@@ -1775,6 +1790,14 @@ async function saveTask() {
       }
     }
     await updateTask(targetDate, editingTask.id, patch);
+    if (newDate !== targetDate) {
+      const allTasks = await getTasks(targetDate);
+      const updatedTask = allTasks.find(t => t.id === editingTask.id);
+      if (updatedTask) {
+        await deleteTask(targetDate, editingTask.id);
+        await addTask(newDate, updatedTask);
+      }
+    }
   } else {
     patch.id = generateId();
     patch.done = false;
@@ -1785,7 +1808,7 @@ async function saveTask() {
         id: generateId(),
         recurrenceId: patch.recurrenceId,
         itemType: 'task',
-        startDate: targetDate,
+        startDate: newDate,
         title: patch.title,
         priority: patch.priority,
         timeEstimate: patch.timeEstimate,
@@ -1795,14 +1818,14 @@ async function saveTask() {
       };
       await addRecurringTemplate(template);
       
-      const endObj = new Date(targetDate);
+      const endObj = new Date(newDate);
       endObj.setDate(endObj.getDate() + 30);
       const y = endObj.getFullYear();
       const m = String(endObj.getMonth() + 1).padStart(2, '0');
       const d = String(endObj.getDate()).padStart(2, '0');
-      await syncRecurringTemplateForRange(template, targetDate, `${y}-${m}-${d}`);
+      await syncRecurringTemplateForRange(template, newDate, `${y}-${m}-${d}`);
     } else {
-      await addTask(targetDate, patch);
+      await addTask(newDate, patch);
     }
   }
   closeTaskModal();
