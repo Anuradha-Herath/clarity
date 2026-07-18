@@ -9,8 +9,11 @@ import {
   pullLatestFromCloud,
 } from '../../shared/storage.js';
 
+const chkMorningPulse = document.getElementById('chk-morning-pulse');
 const setMorning      = document.getElementById('set-morning');
+const chkNightNudge   = document.getElementById('chk-night-nudge');
 const setNight        = document.getElementById('set-night');
+const chkReprompt     = document.getElementById('chk-reprompt');
 const chkAutoCarry    = document.getElementById('chk-auto-carry');
 const btnSave         = document.getElementById('btn-save-settings');
 const saveFeedback    = document.getElementById('save-feedback');
@@ -30,8 +33,13 @@ const btnSyncNow      = document.getElementById('btn-sync-now');
 
 async function loadSettings() {
   const settings = await getSettings();
-  setMorning.value = settings.morningTime ?? '07:00';
-  setNight.value   = settings.nightTime   ?? '22:00';
+  const rituals = settings.rituals || {};
+  chkMorningPulse.checked = rituals.morningPulse?.enabled ?? true;
+  setMorning.value        = rituals.morningPulse?.time ?? '07:30';
+  chkNightNudge.checked   = rituals.nightNudge?.enabled ?? true;
+  setNight.value          = rituals.nightNudge?.time ?? '21:30';
+  chkReprompt.checked     = rituals.repromptIfDismissed ?? true;
+
   chkAutoCarry.checked = settings.autoCarryForward ?? false;
 
   const { bytes, overLimit } = await checkStorageSize();
@@ -59,12 +67,16 @@ async function renderAuthPanel() {
 }
 
 async function saveSettings() {
-  const morningTime = setMorning.value || '07:00';
-  const nightTime   = setNight.value   || '22:00';
   const autoCarryForward = chkAutoCarry.checked;
 
+  const rituals = {
+    morningPulse: { enabled: chkMorningPulse.checked, time: setMorning.value || '07:30' },
+    nightNudge: { enabled: chkNightNudge.checked, time: setNight.value || '21:30' },
+    repromptIfDismissed: chkReprompt.checked
+  };
+
   try {
-    await patchSettings({ morningTime, nightTime, autoCarryForward });
+    await patchSettings({ autoCarryForward, rituals });
     chrome.runtime.sendMessage({ type: 'RESCHEDULE_DAILY_ALARMS' });
     showFeedback('Saved &#10003;', 'var(--color-success)');
   } catch (err) {

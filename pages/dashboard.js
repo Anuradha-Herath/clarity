@@ -17,6 +17,7 @@ import {
 
 import { mountTimeboard } from '../shared/timeboard.js';
 import { getRewardBalance, startRewardSession } from '../shared/rewardService.js';
+import { mountNightNudge, mountMorningPulse } from '../shared/rituals.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 function escHtml(s) {
@@ -95,6 +96,80 @@ let board = null;
 // ─── ══════════════════════════════════════════════════════
 //     TODAY'S TASKS
 // ══════════════════════════════════════════════════════════
+
+// ─── ══════════════════════════════════════════════════════
+//     RITUALS WIDGET
+// ══════════════════════════════════════════════════════════
+const dashRitualsCard = document.getElementById('dash-rituals-card');
+
+async function renderRitualsWidget() {
+  if (!dashRitualsCard) return;
+  
+  const settings = await get('settings') || {};
+  const rituals = settings.rituals || {};
+  
+  const morningEnabled = rituals.morningPulse?.enabled !== false;
+  const nightEnabled = rituals.nightNudge?.enabled !== false;
+  
+  if (!morningEnabled && !nightEnabled) {
+    dashRitualsCard.classList.add('hidden');
+    return;
+  }
+  
+  dashRitualsCard.classList.remove('hidden');
+  
+  const today = todayKey();
+  const tomorrow = dateKey(1);
+  const planToday = await get(`ritualPlans_${today}`);
+  const planTomorrow = await get(`ritualPlans_${tomorrow}`);
+  
+  const morningDone = !!(planToday && planToday.morningPulseCompletedAt);
+  const nightDone = !!(planTomorrow && planTomorrow.nightNudgeCompletedAt);
+  
+  const streaks = settings.streaks || { ritualStreak: 0, lastRitualDate: '' };
+  const streakCount = streaks.ritualStreak || 0;
+  
+  dashRitualsCard.innerHTML = `
+    <div class="card-header" style="border-bottom: none; padding-bottom: 0;">
+      <div class="card-title">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-primary)"><path d="M12 2v4"></path><path d="M12 18v4"></path><path d="M4.93 4.93l2.83 2.83"></path><path d="M16.24 16.24l2.83 2.83"></path><path d="M2 12h4"></path><path d="M18 12h4"></path><path d="M4.93 19.07l2.83-2.83"></path><path d="M16.24 7.76l2.83-2.83"></path></svg>
+        Daily Rituals
+      </div>
+      <div class="ritual-streak ${streakCount === 0 ? 'zero' : ''}" title="Current Streak">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c1.78 0 3.32.96 4.12 2.39C17 5.76 17 8 15 10c-2.4 2.4-1.78 6-1 7 .5.6 1 1 2 1s2.5-.5 3-1.5c1.4-2.8 1.4-6.2.2-9.2C19.78 6.55 20 5.4 20 4c0-1.1-.9-2-2-2-1.2 0-2.2.8-2.6 1.9C14.7 3.3 13.4 3 12 3s-2.7.3-3.4.9C8.2 2.8 7.2 2 6 2 4.9 2 4 2.9 4 4c0 1.4.22 2.55.8 3.3C3.6 10.3 3.6 13.7 5 16.5c.5 1 2 1.5 3 1.5s1.5-.4 2-1c.78-1 1.4-4.6-1-7C7 8 7 5.76 7.88 4.39 8.68 2.96 10.22 2 12 2z"></path></svg>
+        ${streakCount}
+      </div>
+    </div>
+    <div class="card-body" style="padding: 12px 16px;">
+      <div class="widget-rituals-list">
+        ${morningEnabled ? `
+          <div class="ritual-item ${morningDone ? 'done' : ''}" id="btn-ritual-morning">
+            <div>Morning Pulse</div>
+            <div class="ritual-item-status">${morningDone ? '✓ Done' : (new Date().getHours() >= 10 ? 'Plan today' : rituals.morningPulse.time)}</div>
+          </div>
+        ` : ''}
+        ${nightEnabled ? `
+          <div class="ritual-item ${nightDone ? 'done' : ''}" id="btn-ritual-night">
+            <div>Night Nudge</div>
+            <div class="ritual-item-status">${nightDone ? '✓ Done' : rituals.nightNudge.time}</div>
+          </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
+  
+  if (morningEnabled) {
+    document.getElementById('btn-ritual-morning').addEventListener('click', () => {
+      mountMorningPulse().then(renderRitualsWidget);
+    });
+  }
+  
+  if (nightEnabled) {
+    document.getElementById('btn-ritual-night').addEventListener('click', () => {
+      mountNightNudge().then(renderRitualsWidget);
+    });
+  }
+}
 
 // ─── ══════════════════════════════════════════════════════
 //     HABITS TODAY WIDGET
@@ -590,6 +665,7 @@ async function init() {
     getSelectedCat: () => activeCat,
   });
   await Promise.all([
+    renderRitualsWidget(),
     renderTasks(),
     renderInbox(),
     renderWeekProgress(),
@@ -607,6 +683,28 @@ async function init() {
 
   // Initialize automatic synchronization
   initAutoSync();
+  
+  // Check pending rituals / hash
+  const hash = window.location.hash;
+  if (hash === '#ritual=morningPulse') {
+    window.location.hash = '';
+    mountMorningPulse().then(renderRitualsWidget);
+  } else if (hash === '#ritual=nightNudge') {
+    window.location.hash = '';
+    mountNightNudge().then(renderRitualsWidget);
+  } else {
+    const pending = await get('pendingRitual');
+    if (pending) {
+       // Only auto-open if recent (e.g. within 5 mins)
+       if (Date.now() - pending.timestamp < 5 * 60 * 1000) {
+         if (pending.type === 'morningPulse') {
+           mountMorningPulse().then(renderRitualsWidget);
+         } else if (pending.type === 'nightNudge') {
+           mountNightNudge().then(renderRitualsWidget);
+         }
+       }
+    }
+  }
 }
 
 init();

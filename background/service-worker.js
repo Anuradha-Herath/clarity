@@ -58,8 +58,22 @@ function swSet(key, value) {
 
 async function swGetSettings() {
   const stored = await swGet('settings');
-  const defaults = { morningTime: '07:00', nightTime: '22:00', theme: 'light', autoCarryForward: false };
-  return { ...defaults, ...(stored ?? {}) };
+  const defaults = {
+    morningTime: '07:00',
+    nightTime: '22:00',
+    theme: 'light',
+    autoCarryForward: false,
+    rituals: {
+      morningPulse: { enabled: true, time: '07:30' },
+      nightNudge: { enabled: true, time: '21:30' },
+      repromptIfDismissed: true
+    }
+  };
+  const merged = { ...defaults, ...(stored ?? {}) };
+  if (stored && stored.rituals) {
+    merged.rituals = { ...defaults.rituals, ...stored.rituals };
+  }
+  return merged;
 }
 
 function swGenerateId() {
@@ -147,19 +161,25 @@ async function registerDailyAlarms() {
     clearAlarmSafe('midnight_reregister'),
   ]);
 
-  // Morning ritual
-  chrome.alarms.create(ALARM_MORNING, {
-    when: nextAlarmTime(settings.morningTime),
-    periodInMinutes: 24 * 60, // daily
-  });
+  // Morning Pulse
+  const morningRituals = settings.rituals?.morningPulse ?? { enabled: true, time: '07:30' };
+  if (morningRituals.enabled) {
+    chrome.alarms.create(ALARM_MORNING, {
+      when: nextAlarmTime(morningRituals.time),
+      periodInMinutes: 24 * 60, // daily
+    });
+  }
 
-  // Night review
-  chrome.alarms.create(ALARM_NIGHT, {
-    when: nextAlarmTime(settings.nightTime),
-    periodInMinutes: 24 * 60,
-  });
+  // Night Nudge
+  const nightRituals = settings.rituals?.nightNudge ?? { enabled: true, time: '21:30' };
+  if (nightRituals.enabled) {
+    chrome.alarms.create(ALARM_NIGHT, {
+      when: nextAlarmTime(nightRituals.time),
+      periodInMinutes: 24 * 60,
+    });
+  }
 
-  // Next-day prep — always at 21:00
+  // Next-day prep — always at 21:00 (legacy, keep if needed)
   chrome.alarms.create(ALARM_PREP, {
     when: nextAlarmTime('21:00'),
     periodInMinutes: 24 * 60,
@@ -252,30 +272,31 @@ function createNotification(id, title, message, buttons = []) {
 
 // ─── Alarm handlers ────────────────────────────────────────────────────────────
 
-async function handleMorningRitual() {
+async function triggerRitual(type) {
   try {
-    const vision = await swGet('vision');
-    const visionText = vision?.text ?? '';
-    const message = visionText.trim().length > 0
-      ? visionText.trim().slice(0, 80) + (visionText.trim().length > 80 ? '…' : '')
-      : 'Tap to open your vision board';
-
-    createNotification('clarity_morning', 'Good morning — review your vision', message, [
-      { title: 'Open vision' },
-    ]);
+    const ts = Date.now();
+    await swSet('pendingRitual', { type, timestamp: ts });
+    
+    if (type === 'morningPulse') {
+      createNotification('clarity_morning', 'Morning Pulse', 'Confirm or adjust your plan for today.', [
+        { title: 'Open Morning Pulse' },
+      ]);
+    } else if (type === 'nightNudge') {
+      createNotification('clarity_night', 'Night Nudge', 'Pick tomorrow\'s 3 most important tasks.', [
+        { title: 'Open Night Nudge' },
+      ]);
+    }
   } catch (err) {
-    console.error('[SW] handleMorningRitual failed:', err);
+    console.error(`[SW] triggerRitual ${type} failed:`, err);
   }
 }
 
+async function handleMorningRitual() {
+  await triggerRitual('morningPulse');
+}
+
 async function handleNightReview() {
-  try {
-    createNotification('clarity_night', 'Night review', 'Check tomorrow\'s plan and review today', [
-      { title: 'Open planner' },
-    ]);
-  } catch (err) {
-    console.error('[SW] handleNightReview failed:', err);
-  }
+  await triggerRitual('nightNudge');
 }
 
 async function handleNextDayPrep() {
@@ -426,11 +447,65 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   }
 });
 
+async function checkMissedAlarms() {
+  try {
+    const settings = await swGetSettings();
+    const rituals = settings.rituals || {};
+    
+    // Check pending alarms vs expected schedule
+    const now = Date.now();
+    
+    // Morning check
+    if (rituals.morningPulse?.enabled) {
+      const [hh, mm] = rituals.morningPulse.time.split(':').map(Number);
+      const target = new Date();
+      target.setHours(hh, mm, 0, 0);
+      const diff = now - target.getTime();
+      // Missed by up to 3 hours
+      if (diff > 0 && diff < 3 * 60 * 60 * 1000) {
+        // check if completed today
+        const plansKey = `ritualPlans_${todayKey()}`;
+        const plans = await swGet(plansKey);
+        if (!plans || !plans.morningPulseCompletedAt) {
+           // We might trigger multiple times if we wake often, but triggerRitual updates pending timestamp.
+           // Avoid spamming notifications by checking if there's already a pending fresh ritual
+           const pending = await swGet('pendingRitual');
+           if (!pending || pending.type !== 'morningPulse' || (now - pending.timestamp > 3 * 60 * 60 * 1000)) {
+             await handleMorningRitual();
+           }
+        }
+      }
+    }
+    
+    // Night check
+    if (rituals.nightNudge?.enabled) {
+      const [hh, mm] = rituals.nightNudge.time.split(':').map(Number);
+      const target = new Date();
+      target.setHours(hh, mm, 0, 0);
+      const diff = now - target.getTime();
+      if (diff > 0 && diff < 3 * 60 * 60 * 1000) {
+        const tomorrow = dateKey(1);
+        const plansKey = `ritualPlans_${tomorrow}`;
+        const plans = await swGet(plansKey);
+        if (!plans || !plans.nightNudgeCompletedAt) {
+           const pending = await swGet('pendingRitual');
+           if (!pending || pending.type !== 'nightNudge' || (now - pending.timestamp > 3 * 60 * 60 * 1000)) {
+             await handleNightReview();
+           }
+        }
+      }
+    }
+  } catch(e) {
+    console.error('[SW] checkMissedAlarms failed', e);
+  }
+}
+
 // Startup — re-register alarms (SW can be killed and restarted)
 chrome.runtime.onStartup.addListener(async () => {
   console.log('[SW] onStartup — re-registering daily alarms');
   await registerDailyAlarms();
   chrome.alarms.create('auto_cloud_sync', { periodInMinutes: 5 });
+  await checkMissedAlarms();
 });
 
 // Alarm fires
@@ -478,6 +553,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       await handleTimerCompleteAlarm();
       break;
 
+    case 'reprompt_morningPulse':
+      await handleMorningRitual();
+      break;
+
+    case 'reprompt_nightNudge':
+      await handleNightReview();
+      break;
+
     default:
       // Per-block alarm
       if (alarm.name.startsWith('block_')) {
@@ -491,13 +574,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.notifications.onButtonClicked.addListener((notifId, buttonIndex) => {
   console.log('[SW] Notification button clicked:', notifId, buttonIndex);
 
-  // Morning: button 0 → Open vision
+  // Morning: button 0 → Open Morning Pulse in Dashboard
   if (notifId === 'clarity_morning') {
-    chrome.tabs.create({ url: PAGES.vision });
+    chrome.tabs.create({ url: PAGES.dashboard + '#ritual=morningPulse' });
   }
-  // Night: button 0 → Open planner
+  // Night: button 0 → Open Night Nudge in Dashboard
   else if (notifId === 'clarity_night') {
-    chrome.tabs.create({ url: PAGES.planner });
+    chrome.tabs.create({ url: PAGES.dashboard + '#ritual=nightNudge' });
   }
   // Prep: button 0 → View tomorrow (opens planner)
   else if (notifId === 'clarity_prep') {
@@ -519,8 +602,10 @@ chrome.notifications.onButtonClicked.addListener((notifId, buttonIndex) => {
 // Notification click (body click) — same behaviour as button 0
 chrome.notifications.onClicked.addListener((notifId) => {
   if (notifId === 'clarity_morning') {
-    chrome.tabs.create({ url: PAGES.vision });
-  } else if (notifId === 'clarity_night' || notifId === 'clarity_prep') {
+    chrome.tabs.create({ url: PAGES.dashboard + '#ritual=morningPulse' });
+  } else if (notifId === 'clarity_night') {
+    chrome.tabs.create({ url: PAGES.dashboard + '#ritual=nightNudge' });
+  } else if (notifId === 'clarity_prep') {
     chrome.tabs.create({ url: PAGES.planner });
   } else if (notifId.startsWith('clarity_block_')) {
     chrome.tabs.create({ url: PAGES.dashboard });
@@ -528,6 +613,31 @@ chrome.notifications.onClicked.addListener((notifId) => {
     chrome.tabs.create({ url: PAGES.tracker });
   }
   chrome.notifications.clear(notifId);
+});
+
+// Handle notification dismissal for reprompts
+chrome.notifications.onClosed.addListener(async (notifId, byUser) => {
+  if (byUser) {
+    if (notifId === 'clarity_morning' || notifId === 'clarity_night') {
+      const type = notifId === 'clarity_morning' ? 'morningPulse' : 'nightNudge';
+      try {
+        const settings = await swGetSettings();
+        if (settings.rituals?.repromptIfDismissed) {
+          // Verify it hasn't been completed
+          const dateStr = type === 'morningPulse' ? todayKey() : dateKey(1);
+          const plans = await swGet(`ritualPlans_${dateStr}`);
+          const isDone = type === 'morningPulse' ? plans?.morningPulseCompletedAt : plans?.nightNudgeCompletedAt;
+          
+          if (!isDone) {
+             // Create an alarm for 15 minutes from now
+             chrome.alarms.create(`reprompt_${type}`, { delayInMinutes: 15 });
+          }
+        }
+      } catch (e) {
+        console.error('[SW] Reprompt setup failed', e);
+      }
+    }
+  }
 });
 
 // Quick-capture keyboard command

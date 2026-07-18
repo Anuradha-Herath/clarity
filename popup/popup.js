@@ -202,8 +202,9 @@ async function renderInboxPanel() {
 async function renderSettingsPanel() {
   try {
     const settings = await getSettings();
-    setMorning.value = settings.morningTime ?? '07:00';
-    setNight.value   = settings.nightTime   ?? '22:00';
+    const rituals = settings.rituals || {};
+    setMorning.value = rituals.morningPulse?.time ?? '07:30';
+    setNight.value   = rituals.nightNudge?.time   ?? '21:30';
 
     // Storage usage
     const { bytes, overLimit } = await checkStorageSize();
@@ -244,11 +245,19 @@ async function renderAuthPanel() {
 }
 
 async function saveSettings() {
-  const morningTime = setMorning.value || '07:00';
-  const nightTime   = setNight.value   || '22:00';
+  const morningTime = setMorning.value || '07:30';
+  const nightTime   = setNight.value   || '21:30';
 
   try {
-    await patchSettings({ morningTime, nightTime });
+    const currentSettings = await getSettings();
+    const currentRituals = currentSettings.rituals || {};
+    const rituals = {
+      ...currentRituals,
+      morningPulse: { ...currentRituals.morningPulse, time: morningTime },
+      nightNudge: { ...currentRituals.nightNudge, time: nightTime }
+    };
+
+    await patchSettings({ rituals });
 
     // Tell service worker to reschedule alarms
     chrome.runtime.sendMessage({ type: 'RESCHEDULE_DAILY_ALARMS' });

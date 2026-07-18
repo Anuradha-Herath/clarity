@@ -25,6 +25,11 @@ const DEFAULTS = {
     theme: 'light',
     autoCarryForward: false,
     migrationComplete: false,
+    rituals: {
+      nightNudge: { enabled: true, time: '21:30' },
+      morningPulse: { enabled: true, time: '07:30' },
+      repromptIfDismissed: true
+    }
   },
   vision: {
     text: '',
@@ -48,7 +53,12 @@ const DEFAULTS = {
   },
   rewardSessions: [],
   activeRewardSession: null,
-  recurring_templates: []
+  recurring_templates: [],
+  streaks: {
+    ritualStreak: 0,
+    lastRitualDate: '',
+    longestStreak: 0
+  }
 };
 
 // ─── ID generator ──────────────────────────────────────────────────────────────
@@ -157,6 +167,10 @@ export async function get(key) {
   try {
     const result = await chrome.storage.local.get(key);
     if (key in result) {
+      if (key === 'settings') {
+        // Deep merge with defaults so existing users get new config objects like rituals
+        return { ...structuredClone(DEFAULTS.settings), ...result[key], rituals: { ...DEFAULTS.settings.rituals, ...(result[key].rituals || {}) } };
+      }
       return result[key];
     }
     // Return defaults for known keys
