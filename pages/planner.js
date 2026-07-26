@@ -1882,6 +1882,15 @@ btnTaskDelete.addEventListener('click', async () => {
           if (t) await deleteRecurringTemplate(t.id);
         } else {
           await deleteTask(targetDate, editingTask.id);
+          if (editingTask.recurrenceId) {
+            const templates = await getRecurringTemplates();
+            const t = templates.find(x => x.recurrenceId === editingTask.recurrenceId);
+            if (t) {
+              if (!t.exceptions) t.exceptions = [];
+              if (!t.exceptions.includes(targetDate)) t.exceptions.push(targetDate);
+              await updateRecurringTemplate(t.id, { exceptions: t.exceptions });
+            }
+          }
         }
       }
       

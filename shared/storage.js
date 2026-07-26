@@ -1971,7 +1971,9 @@ export async function syncRecurringTemplateForRange(template, startDate, endDate
     const dateStr = `${y}-${m}-${d}`;
 
     if (matchesRecurrencePattern(cur, template.recurrencePattern)) {
-      if (template.itemType === 'task') {
+      if (template.exceptions && template.exceptions.includes(dateStr)) {
+        // Skip exception dates
+      } else if (template.itemType === 'task') {
         const tasks = await getTasks(dateStr);
         const exists = tasks.some(t => t.recurrenceId === template.recurrenceId);
         if (!exists) {
@@ -2027,7 +2029,7 @@ export async function removeFutureRecurringInstances(recurrenceId, fromDate, ite
           if (Array.isArray(tasks)) {
             const filtered = tasks.filter(t => t.recurrenceId !== recurrenceId);
             if (filtered.length !== tasks.length) {
-              await chrome.storage.local.set({ [key]: filtered });
+              await set(key, filtered);
             }
           }
         }
@@ -2039,7 +2041,7 @@ export async function removeFutureRecurringInstances(recurrenceId, fromDate, ite
           if (Array.isArray(blocks)) {
             const filtered = blocks.filter(b => b.recurrenceId !== recurrenceId);
             if (filtered.length !== blocks.length) {
-              await chrome.storage.local.set({ [key]: filtered });
+              await set(key, filtered);
             }
           }
         }
@@ -2070,7 +2072,7 @@ export async function updateFutureRecurringInstances(recurrenceId, fromDate, ite
               }
             }
             if (changed) {
-              await chrome.storage.local.set({ [key]: tasks });
+              await set(key, tasks);
             }
           }
         }
@@ -2088,7 +2090,7 @@ export async function updateFutureRecurringInstances(recurrenceId, fromDate, ite
               }
             }
             if (changed) {
-              await chrome.storage.local.set({ [key]: blocks });
+              await set(key, blocks);
             }
           }
         }

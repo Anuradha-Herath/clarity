@@ -101,32 +101,43 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   const innerEl = document.createElement('div');
   innerEl.style.cssText = 'display:flex; position:relative;';
 
-  // Labels column (52px wide, one label per hour)
+  // Labels column (56px wide, labels centered on line boundaries)
   const labelsEl = document.createElement('div');
-  labelsEl.style.cssText = 'width:52px; flex-shrink:0;';
-  for (let h = BOARD_START; h < BOARD_END; h++) {
+  labelsEl.style.cssText = 'width:56px; flex-shrink:0; position:relative;';
+  for (let h = BOARD_START; h <= BOARD_END; h++) {
+    const topPx = (h - BOARD_START) * PX_PER_HOUR;
     const lbl = document.createElement('div');
-    lbl.style.cssText = `height:${PX_PER_HOUR}px; display:flex; align-items:flex-start;
-      padding-top:2px; padding-right:8px; font-size:10px; color:#64748B;
-      font-weight:500; justify-content:flex-end; box-sizing:border-box;
-      font-family:inherit;`;
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const disp = h > 12 ? h - 12 : h === 0 ? 12 : h;
+    lbl.style.cssText = `position:absolute; top:${topPx}px; transform:translateY(-50%);
+      right:8px; font-size:11px; color:#475569; font-weight:600;
+      line-height:1; font-family:inherit; white-space:nowrap; pointer-events:none;`;
+    const ampm = h >= 12 && h < 24 ? 'PM' : 'AM';
+    const disp = h > 12 ? (h > 24 ? h - 24 : h - 12) : (h === 0 || h === 24 ? 12 : h);
     lbl.textContent = `${disp} ${ampm}`;
     labelsEl.appendChild(lbl);
+
+    // Half-hour label (subtle :30 mark)
+    if (h < BOARD_END) {
+      const halfTopPx = topPx + (PX_PER_HOUR / 2);
+      const halfLbl = document.createElement('div');
+      halfLbl.style.cssText = `position:absolute; top:${halfTopPx}px; transform:translateY(-50%);
+        right:8px; font-size:9px; color:#94A3B8; font-weight:500;
+        line-height:1; font-family:inherit; white-space:nowrap; pointer-events:none;`;
+      halfLbl.textContent = `:30`;
+      labelsEl.appendChild(halfLbl);
+    }
   }
 
   // Grid (fills remaining width, position:relative for absolute blocks)
   const gridEl = document.createElement('div');
-  gridEl.style.cssText = `flex:1; position:relative; border-left:1px solid #E2E8F0;
+  gridEl.style.cssText = `flex:1; position:relative; border-left:1px solid #CBD5E1;
     height:${TOTAL_HOURS * PX_PER_HOUR}px; overflow:visible;`;
 
   // Slot lines
-  const totalSlots = TOTAL_HOURS * 2; // 34 half-hour slots
+  const totalSlots = TOTAL_HOURS * 2; // 36 half-hour slots
   for (let i = 0; i < totalSlots; i++) {
     const slot = document.createElement('div');
     const isHalf = i % 2 !== 0;
-    slot.style.cssText = `height:${PX_PER_HOUR / 2}px; border-bottom:1px ${isHalf ? 'dashed' : 'solid'} ${isHalf ? '#f1f5f9' : '#E2E8F0'}; box-sizing:border-box;`;
+    slot.style.cssText = `height:${PX_PER_HOUR / 2}px; border-bottom:1px ${isHalf ? 'dashed' : 'solid'} ${isHalf ? '#e2e8f0' : '#CBD5E1'}; box-sizing:border-box;`;
     gridEl.appendChild(slot);
   }
 
@@ -234,6 +245,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
     const isInfra = b.isInfrastructure;
     const isRecur = b.isRecurring;
+    const isDone  = !!b.completed;
     const icon = isRecur ? '<span style="font-size:10px; margin-right:4px;" title="Recurring">🔄</span>' : '';
 
     const el = document.createElement('div');
@@ -249,9 +261,9 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       top: ${top}px;
       height: ${height}px;
       left: ${leftCss}; ${rightCss} width: ${widthCss};
-      background: ${s.bg};
-      border-left: 3px solid ${s.acc};
-      color: ${s.txt};
+      background: ${isDone ? '#f8fafc' : s.bg};
+      border-left: 4px solid ${isDone ? '#16A34A' : s.acc};
+      color: ${isDone ? '#64748B' : s.txt};
       border-radius: 6px;
       overflow: hidden;
       cursor: default;
@@ -259,29 +271,47 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       user-select: none;
       z-index: ${zIndex};
       box-sizing: border-box;
-      transition: opacity 150ms;
+      transition: opacity 150ms, background 150ms;
       ${isInfra ? 'opacity: 0.75; filter: grayscale(0.2);' : ''}
+      ${isDone ? 'opacity: 0.85;' : ''}
     `;
     const isSmall = height < 35;
     const dragHandle = isInfra ? '' : `<div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>`;
     const resizeHandle = isInfra ? '' : `<div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>`;
     
+    const checkToggle = `<input type="checkbox" data-complete-toggle ${isDone ? 'checked' : ''} style="margin:0 5px 0 0; cursor:pointer; width:14px; height:14px; accent-color:#16A34A; flex-shrink:0; vertical-align:middle;" title="${isDone ? 'Mark as incomplete' : 'Mark as completed'}" />`;
+    const textStyle = isDone ? 'text-decoration:line-through; opacity:0.75;' : '';
+
     el.innerHTML = isSmall ? `
       ${dragHandle}
-      <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px;cursor:pointer;padding-right:8px;${isInfra ? 'margin-left:-12px;' : ''}">
-        ${icon}${esc(b.title || 'Untitled')}
+      <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px;cursor:pointer;padding-right:8px;${isInfra ? 'margin-left:-12px;' : ''};${textStyle}">
+        ${checkToggle}${icon}${esc(b.title || 'Untitled')}
         <span data-time-label style="font-size:9px;font-weight:normal;opacity:0.8;margin-left:4px;">(${formatHour(b.start)} – ${formatHour(b.end)})</span>
       </div>
       ${resizeHandle}
     ` : `
       ${dragHandle}
-      <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;${isInfra ? 'margin-left:-12px;' : ''}">${icon}${esc(b.title || 'Untitled')}</div>
+      <div style="display:flex; align-items:center; gap:2px; ${isInfra ? 'margin-left:-12px;' : ''}">
+        ${checkToggle}
+        <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;${textStyle}">${icon}${esc(b.title || 'Untitled')}</div>
+      </div>
       <div data-time-label style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;${isInfra ? 'margin-left:-12px;' : ''}">${formatHour(b.start)} – ${formatHour(b.end)}</div>
       ${resizeHandle}
     `;
 
+    const chk = el.querySelector('[data-complete-toggle]');
+    if (chk) {
+      chk.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const newStatus = chk.checked;
+        b.completed = newStatus;
+        await updateBlock(date, b.id, { completed: newStatus });
+        await loadBlocks();
+      });
+    }
+
     el.addEventListener('mouseenter', () => { el.style.opacity = '0.88'; });
-    el.addEventListener('mouseleave', () => { el.style.opacity = '1'; });
+    el.addEventListener('mouseleave', () => { el.style.opacity = isDone ? '0.85' : '1'; });
  
     // Click → edit modal
     el.addEventListener('click', (e) => {
@@ -335,15 +365,21 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   // ── Drag to create ──────────────────────────────────────────────────────────
   function getGridY(e) {
     const rect = gridEl.getBoundingClientRect();
-    return e.clientY - rect.top + boardEl.scrollTop;
+    return e.clientY - rect.top;
+  }
+
+  function getSlotStartHour(e) {
+    const rawH = clampH(pxToHour(getGridY(e)));
+    // Floor to nearest half-hour slot so clicking anywhere in the 6:30 slot gets 6:30 (18.5)
+    return Math.min(BOARD_END - 0.5, Math.floor(rawH * 2) / 2);
   }
 
   gridEl.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     if (e.target.closest('[data-block]')) return;
     e.preventDefault();
-    const startHour = snapHour(clampH(pxToHour(getGridY(e))));
-    dragCreate = { startHour, endHour: startHour + 0.5, ghost: null };
+    const startHour = getSlotStartHour(e);
+    dragCreate = { startHour, endHour: startHour + 0.5, ghost: null, hasDragged: false };
   });
 
   // ── Drag & Drop tasks onto grid ─────────────────────────────────────────────
@@ -360,7 +396,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       const taskData = JSON.parse(dataStr);
       if (!taskData || !taskData.title) return;
 
-      const startHour = snapHour(clampH(pxToHour(getGridY(e))));
+      const startHour = getSlotStartHour(e);
       
       // Snapping to estimate or defaulting to 1 hour
       const duration = taskData.timeEstimate ? Math.max(0.5, snapHour(taskData.timeEstimate / 60)) : 1.0;
@@ -399,22 +435,29 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   function onMouseMove(e) {
     if (dragCreate) {
       const rawEnd = snapHour(clampH(pxToHour(getGridY(e))));
-      dragCreate.endHour = Math.max(dragCreate.startHour + 0.5, rawEnd);
-
-      if (!dragCreate.ghost) {
-        const g = document.createElement('div');
-        g.style.cssText = `position:absolute; left:2px; right:2px;
-          background:#EEF2FF; border:2px dashed #4F46E5; border-radius:6px;
-          opacity:0.75; pointer-events:none; z-index:5; box-sizing:border-box;`;
-        gridEl.appendChild(g);
-        dragCreate.ghost = g;
-        document.body.style.userSelect = 'none';
+      const targetEnd = Math.max(dragCreate.startHour + 0.5, rawEnd);
+      
+      if (targetEnd !== dragCreate.endHour) {
+        dragCreate.endHour = targetEnd;
+        dragCreate.hasDragged = true;
       }
 
-      const s = dragCreate.startHour;
-      const e2 = dragCreate.endHour;
-      dragCreate.ghost.style.top    = hourToPx(s) + 'px';
-      dragCreate.ghost.style.height = Math.max(24, hourToPx(e2) - hourToPx(s)) + 'px';
+      if (dragCreate.hasDragged) {
+        if (!dragCreate.ghost) {
+          const g = document.createElement('div');
+          g.style.cssText = `position:absolute; left:2px; right:2px;
+            background:#EEF2FF; border:2px dashed #4F46E5; border-radius:6px;
+            opacity:0.75; pointer-events:none; z-index:5; box-sizing:border-box;`;
+          gridEl.appendChild(g);
+          dragCreate.ghost = g;
+          document.body.style.userSelect = 'none';
+        }
+
+        const s = dragCreate.startHour;
+        const e2 = dragCreate.endHour;
+        dragCreate.ghost.style.top    = hourToPx(s) + 'px';
+        dragCreate.ghost.style.height = Math.max(24, hourToPx(e2) - hourToPx(s)) + 'px';
+      }
     }
 
     if (dragResize) {
@@ -562,6 +605,15 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
           if (t) await deleteRecurringTemplate(t.id);
         } else {
           await deleteBlock(date, block.id);
+          if (block.isRecurring && block.recurrenceId) {
+            const templates = await getRecurringTemplates();
+            const t = templates.find(x => x.recurrenceId === block.recurrenceId);
+            if (t) {
+              if (!t.exceptions) t.exceptions = [];
+              if (!t.exceptions.includes(date)) t.exceptions.push(date);
+              await updateRecurringTemplate(t.id, { exceptions: t.exceptions });
+            }
+          }
         }
         cancelAlarm(block.id);
         modal.hide();
@@ -695,6 +747,13 @@ function buildBlockModal() {
             </label>
           </div>
         </div>
+        <!-- Completion Option -->
+        <div style="margin-top:4px; padding-top:10px; border-top:1px solid #E2E8F0;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#1E293B;">
+            <input type="checkbox" data-completed-toggle style="accent-color:#16A34A; width:15px; height:15px; cursor:pointer;" />
+            Mark as completed ✓
+          </label>
+        </div>
       </div>
       <!-- Footer -->
       <div style="display:flex; align-items:center; justify-content:space-between;
@@ -806,8 +865,9 @@ function buildBlockModal() {
       customDays: repeatPattern.value === 'custom' ? Array.from(customDays) : []
     } : null;
     const isInfrastructure = isRoutine.checked;
+    const completed = q('[data-completed-toggle]').checked;
     
-    const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure };
+    const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure, completed };
     
     if (curBlock.isRecurring && curBlock.id && window.confirm("This is a recurring block.\n\nPress OK to apply changes to ALL FUTURE blocks in this series.\nPress Cancel to apply changes ONLY to this block.")) {
       onSaveCb?.(updated, 'following');
@@ -854,6 +914,7 @@ function buildBlockModal() {
     repeatPattern.value = block.recurrencePattern?.type || 'daily';
     repeatCustom.style.display = repeatPattern.value === 'custom' ? 'flex' : 'none';
     isRoutine.checked = !!block.isInfrastructure;
+    q('[data-completed-toggle]').checked = !!block.completed;
     
     customDays.clear();
     overlay.querySelectorAll('.day-pill').forEach(btn => {
