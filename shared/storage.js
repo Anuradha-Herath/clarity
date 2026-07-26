@@ -24,6 +24,12 @@ const DEFAULTS = {
     nightTime: '22:00',
     theme: 'light',
     autoCarryForward: false,
+    migrationComplete: false,
+    rituals: {
+      nightNudge: { enabled: true, time: '21:30' },
+      morningPulse: { enabled: true, time: '07:30' },
+      repromptIfDismissed: true
+    }
   },
   vision: {
     text: '',
@@ -32,10 +38,27 @@ const DEFAULTS = {
   smart_goals: [],
   goals_long: [],
   goals_short: [],
+  goals: [],
   yearly_themes: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, theme: '' })),
   time_logs: [],
   capture_inbox: [],
   habits: [],
+  rewardBalance: {
+    userId: '',
+    minutesAvailable: 0,
+    minutesEarnedThisWeek: 0,
+    minutesSpentThisWeek: 0,
+    lastResetDate: '',
+    updatedAt: 0
+  },
+  rewardSessions: [],
+  activeRewardSession: null,
+  recurring_templates: [],
+  streaks: {
+    ritualStreak: 0,
+    lastRitualDate: '',
+    longestStreak: 0
+  }
 };
 
 // ─── ID generator ──────────────────────────────────────────────────────────────
@@ -57,22 +80,34 @@ export function generateId() {
 // ─── Date helper ───────────────────────────────────────────────────────────────
 
 /**
- * Returns today's date as "YYYY-MM-DD".
+ * Format a Date object to "YYYY-MM-DD" in local timezone.
+ * @param {Date} d
  * @returns {string}
  */
-export function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+export function formatLocalDate(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /**
- * Returns a date offset by `days` from today as "YYYY-MM-DD".
+ * Returns today's date as "YYYY-MM-DD" in local timezone.
+ * @returns {string}
+ */
+export function todayKey() {
+  return formatLocalDate(new Date());
+}
+
+/**
+ * Returns a date offset by `days` from today as "YYYY-MM-DD" in local timezone.
  * @param {number} days  Positive = future, negative = past.
  * @returns {string}
  */
 export function dateKey(days = 0) {
   const d = new Date();
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return formatLocalDate(d);
 }
 
 /**
@@ -132,6 +167,10 @@ export async function get(key) {
   try {
     const result = await chrome.storage.local.get(key);
     if (key in result) {
+      if (key === 'settings') {
+        // Deep merge with defaults so existing users get new config objects like rituals
+        return { ...structuredClone(DEFAULTS.settings), ...result[key], rituals: { ...DEFAULTS.settings.rituals, ...(result[key].rituals || {}) } };
+      }
       return result[key];
     }
     // Return defaults for known keys
@@ -505,10 +544,77 @@ export async function updateTask(date, id, patch, editMode = null) {
     }
   }
 
+  const oldGoalId = task?.linkedGoalId || null;
+  const newGoalId = patch.linkedGoalId !== undefined ? patch.linkedGoalId : oldGoalId;
+
   await update(`tasks_${date}`, id, patch);
   const updatedTask = (await get(`tasks_${date}`))?.find(t => t.id === id);
-  if (updatedTask && updatedTask.habitId && 'done' in patch) {
-    await handleHabitCompletionToggle(date, updatedTask.habitId, updatedTask.habitTime, patch.done);
+
+  if (updatedTask) {
+    if (updatedTask.habitId && 'done' in patch) {
+      await handleHabitCompletionToggle(date, updatedTask.habitId, updatedTask.habitTime, patch.done);
+    }
+
+    // Reward Earning Trigger Hook
+    const statusChanged = 'done' in patch;
+    const subtasksChanged = 'subtasks' in patch;
+    if (statusChanged || subtasksChanged) {
+      const auth = await getAuth();
+      const userId = auth?.localId || '';
+      if (userId) {
+        if (statusChanged) {
+          const isChecked = patch.done;
+          import('./rewardService.js').then(async (m) => {
+            const result = await m.handleTaskComplete(userId, updatedTask, false, isChecked, null);
+            if (result && result.earned > 0 && typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('reward-minutes-earned', {
+                detail: { taskId: id, subId: null, minutes: result.earned }
+              }));
+            }
+          }).catch(err => {
+            console.error('[Storage] Reward calculation error:', err);
+          });
+        }
+        if (subtasksChanged && task) {
+          const oldSubs = task.subtasks || [];
+          const newSubs = patch.subtasks || [];
+          for (const newSub of newSubs) {
+            const oldSub = oldSubs.find(s => s.id === newSub.id);
+            const wasDone = oldSub ? oldSub.done : false;
+            const isDone = newSub.done;
+            if (isDone !== wasDone) {
+              import('./rewardService.js').then(async (m) => {
+                const result = await m.handleTaskComplete(userId, newSub, true, isDone, updatedTask);
+                if (result && result.earned > 0 && typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('reward-minutes-earned', {
+                    detail: { taskId: id, subId: newSub.id, minutes: result.earned }
+                  }));
+                }
+              }).catch(err => {
+                console.error('[Storage] Subtask reward calculation error:', err);
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Trigger goal progress cascade if completion status changed, subtasks changed, OR linkedGoalId changed
+    const goalLinkChanged = oldGoalId !== newGoalId;
+    if (statusChanged || subtasksChanged || goalLinkChanged) {
+      const auth = await getAuth();
+      const userId = auth?.localId || '';
+
+      if (oldGoalId) {
+        await recalculateGoalProgress(userId, oldGoalId);
+      }
+      if (newGoalId && newGoalId !== oldGoalId) {
+        await recalculateGoalProgress(userId, newGoalId);
+      }
+      if (updatedTask.linkedGoalId && updatedTask.linkedGoalId !== oldGoalId && updatedTask.linkedGoalId !== newGoalId) {
+        await recalculateGoalProgress(userId, updatedTask.linkedGoalId);
+      }
+    }
   }
 }
 
@@ -519,7 +625,15 @@ export async function updateTask(date, id, patch, editMode = null) {
  * @returns {Promise<void>}
  */
 export async function deleteTask(date, id) {
+  const tasks = (await get(`tasks_${date}`)) ?? [];
+  const task = tasks.find(t => t.id === id);
   await remove(`tasks_${date}`, id);
+
+  if (task && task.linkedGoalId) {
+    const auth = await getAuth();
+    const userId = auth?.localId || '';
+    await recalculateGoalProgress(userId, task.linkedGoalId);
+  }
 }
 
 /**
@@ -678,6 +792,248 @@ export async function getLongGoals() {
  */
 export async function getShortGoals() {
   return (await get('goals_short')) ?? [];
+}
+
+/**
+ * Get all unified goals (migrates if needed).
+ * @returns {Promise<Array>}
+ */
+export async function getGoals() {
+  await runGoalsMigration();
+  return (await get('goals')) ?? [];
+}
+
+/**
+ * Save unified goals array.
+ * @param {Array} goals
+ * @returns {Promise<void>}
+ */
+export async function saveGoals(goals) {
+  await set('goals', goals);
+}
+
+let migrationPromise = null;
+
+/**
+ * Runs a one-time migration to convert old goals to the unified format.
+ * @returns {Promise<void>}
+ */
+export async function runGoalsMigration() {
+  if (migrationPromise) return migrationPromise;
+
+  migrationPromise = (async () => {
+    const settings = await getSettings();
+    if (settings.migrationComplete) return;
+
+    const auth = await getAuth();
+    const userId = auth?.localId || '';
+
+    const [smart, long, short] = await Promise.all([
+      getSmartGoals(),
+      getLongGoals(),
+      getShortGoals()
+    ]);
+
+    const migratedGoals = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    function inferTimeframe(targetDateStr) {
+      if (!targetDateStr) return 'longterm';
+      try {
+        const targetDate = new Date(targetDateStr + 'T00:00:00');
+        targetDate.setHours(0, 0, 0, 0);
+        const diffTime = targetDate - today;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return (diffDays <= 90 && diffDays >= 0) ? 'shortterm' : 'longterm';
+      } catch {
+        return 'longterm';
+      }
+    }
+
+    // 1. SMART goals
+    for (const g of smart) {
+      const timeframe = inferTimeframe(g.targetDate);
+      migratedGoals.push({
+        id: g.id || generateId(),
+        userId: userId,
+        title: g.title || '',
+        timeframe: timeframe,
+        isSmart: true,
+        specific: g.specific || g.description || null,
+        measurable: g.measurable || null,
+        targetDate: g.targetDate || null,
+        parentGoalId: g.parentGoalId || null,
+        progress: g.progress || 0,
+        linkedTaskCount: g.linkedTaskCount || 0,
+        completedTaskCount: g.completedTaskCount || 0,
+        createdAt: g.createdAt || new Date().toISOString(),
+        updatedAt: g.updatedAt || new Date().toISOString()
+      });
+    }
+
+    // 2. Long-term goals
+    for (const g of long) {
+      migratedGoals.push({
+        id: g.id || generateId(),
+        userId: userId,
+        title: g.title || '',
+        timeframe: 'longterm',
+        isSmart: false,
+        specific: g.specific || null,
+        measurable: g.measurable || null,
+        targetDate: g.targetDate || null,
+        parentGoalId: g.parentGoalId || null,
+        progress: g.progress || 0,
+        linkedTaskCount: g.linkedTaskCount || 0,
+        completedTaskCount: g.completedTaskCount || 0,
+        createdAt: g.createdAt || new Date().toISOString(),
+        updatedAt: g.updatedAt || new Date().toISOString()
+      });
+    }
+
+    // 3. Short-term goals
+    for (const g of short) {
+      migratedGoals.push({
+        id: g.id || generateId(),
+        userId: userId,
+        title: g.title || '',
+        timeframe: 'shortterm',
+        isSmart: false,
+        specific: g.specific || null,
+        measurable: g.measurable || null,
+        targetDate: g.targetDate || null,
+        parentGoalId: g.parentGoalId || null,
+        progress: g.progress || 0,
+        linkedTaskCount: g.linkedTaskCount || 0,
+        completedTaskCount: g.completedTaskCount || 0,
+        createdAt: g.createdAt || new Date().toISOString(),
+        updatedAt: g.updatedAt || new Date().toISOString()
+      });
+    }
+
+    await set('goals', migratedGoals);
+    // Clear old buckets to reclaim storage space
+    await set('smart_goals', []);
+    await set('goals_long', []);
+    await set('goals_short', []);
+    // Update settings
+    await patchSettings({ migrationComplete: true });
+  })();
+
+  return migrationPromise;
+}
+
+/**
+ * Recalculates task counts and progress percentage for a given goal.
+ * @param {string} userId
+ * @param {string} goalId
+ * @returns {Promise<void>}
+ */
+export async function recalculateGoalProgress(userId, goalId) {
+  if (!goalId) return;
+
+  const goals = await getGoals();
+  const goalIndex = goals.findIndex(g => g.id === goalId);
+  if (goalIndex === -1) return;
+
+  const goal = goals[goalIndex];
+
+  const allStorage = await chrome.storage.local.get(null);
+  
+  let totalUnits = 0;
+  let completedUnits = 0;
+
+  for (const key of Object.keys(allStorage)) {
+    if (key.startsWith('tasks_')) {
+      const tasks = allStorage[key];
+      if (Array.isArray(tasks)) {
+        for (const t of tasks) {
+          if (t.linkedGoalId === goalId) {
+            totalUnits += 1;
+            if (t.subtasks && t.subtasks.length > 0) {
+              const totalSub = t.subtasks.length;
+              const completedSub = t.subtasks.filter(sub => sub.done).length;
+              completedUnits += (completedSub / totalSub);
+            } else {
+              if (t.done) {
+                completedUnits += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const progress = totalUnits === 0 ? 0 : Math.round((completedUnits / totalUnits) * 100);
+
+  // Round completed count to 2 decimal places for storage
+  goal.linkedTaskCount = totalUnits;
+  goal.completedTaskCount = Math.round(completedUnits * 100) / 100;
+  goal.progress = progress;
+  goal.updatedAt = new Date().toISOString();
+
+  await set('goals', goals);
+
+  if (goal.parentGoalId) {
+    await recalculateParentProgress(userId, goal.parentGoalId);
+  }
+}
+
+/**
+ * Recalculates progress for a parent (long-term) goal based on the average progress
+ * of all its child (short-term) goals.
+ * @param {string} userId
+ * @param {string} parentGoalId
+ * @returns {Promise<void>}
+ */
+export async function recalculateParentProgress(userId, parentGoalId) {
+  if (!parentGoalId) return;
+
+  const goals = await getGoals();
+  const parentIndex = goals.findIndex(g => g.id === parentGoalId);
+  if (parentIndex === -1) return;
+
+  const parentGoal = goals[parentIndex];
+
+  const childGoals = goals.filter(g => g.parentGoalId === parentGoalId);
+
+  let progress = 0;
+  if (childGoals.length > 0) {
+    const totalProgress = childGoals.reduce((sum, g) => sum + (g.progress || 0), 0);
+    progress = Math.round(totalProgress / childGoals.length);
+  } else {
+    // If no child goals, fall back to recalculating based on direct tasks linked to this long-term goal
+    const allStorage = await chrome.storage.local.get(null);
+    let linkedTaskCount = 0;
+    let completedTaskCount = 0;
+
+    for (const key of Object.keys(allStorage)) {
+      if (key.startsWith('tasks_')) {
+        const tasks = allStorage[key];
+        if (Array.isArray(tasks)) {
+          for (const t of tasks) {
+            if (t.linkedGoalId === parentGoalId) {
+              linkedTaskCount++;
+              if (t.done) {
+                completedTaskCount++;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    progress = linkedTaskCount === 0 ? 0 : Math.round((completedTaskCount / linkedTaskCount) * 100);
+    parentGoal.linkedTaskCount = linkedTaskCount;
+    parentGoal.completedTaskCount = completedTaskCount;
+  }
+
+  parentGoal.progress = progress;
+  parentGoal.updatedAt = new Date().toISOString();
+
+  await set('goals', goals);
 }
 
 /**
@@ -992,7 +1348,7 @@ export async function syncToCloud(key, value) {
   if (!auth) return;
 
   try {
-    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data/${key}`;
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data/${key}?key=${firebaseConfig.apiKey}`;
     const fields = {
       value: { stringValue: JSON.stringify(value) },
       updatedAt: { integerValue: Date.now().toString() }
@@ -1025,7 +1381,7 @@ export async function deleteFromCloud(key) {
   if (!auth) return;
 
   try {
-    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data/${key}`;
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data/${key}?key=${firebaseConfig.apiKey}`;
     const res = await fetch(url, {
       method: 'DELETE',
       headers: {
@@ -1132,7 +1488,7 @@ export async function pullLatestFromCloud() {
 
   // 1. Pull user data (tasks, blocks, settings, etc.)
   try {
-    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data`;
+    const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/data?key=${firebaseConfig.apiKey}`;
     const res = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${auth.idToken}`
@@ -1168,7 +1524,7 @@ export async function pullLatestFromCloud() {
   // 2. Pull fixed events (skip if a local write occurred within the last 10 seconds to avoid race conditions)
   if (Date.now() - lastFixedEventsWriteTime > 10000) {
     try {
-      const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/fixed_events`;
+      const url = `${FIRESTORE_REST_BASE}/users/${auth.localId}/fixed_events?key=${firebaseConfig.apiKey}`;
       const res = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${auth.idToken}`
@@ -1221,6 +1577,22 @@ export async function initAutoSync() {
   // 1. Initial pull on load
   runPull();
 
+  // Initialize Reward System (Weekly resets & Floating Widget)
+  getAuth().then(auth => {
+    if (auth && auth.localId) {
+      import('./rewardService.js').then(async (m) => {
+        try {
+          await m.checkAndResetWeekly(auth.localId);
+          await m.initRewardTimerWidget();
+        } catch (e) {
+          console.error('[RewardAutoSync] Init failed:', e);
+        }
+      }).catch(err => {
+        console.error('[Storage] Failed to import rewardService:', err);
+      });
+    }
+  });
+
   // 2. Focus and visibility changes
   window.addEventListener('focus', runPull);
   document.addEventListener('visibilitychange', () => {
@@ -1265,6 +1637,37 @@ export async function getCustomCategories() {
  */
 export async function saveCustomCategories(categories) {
   await set('task_categories', categories);
+}
+
+/**
+ * Get category order for a specific day.
+ * If a daily order exists, it is merged with current custom categories (to include newly added ones).
+ * @param {string} dateStr 
+ * @returns {Promise<Array<string>>}
+ */
+export async function getDailyCategoryOrder(dateStr) {
+  const allCategories = await getCustomCategories();
+  const dailyOrder = await get(`category_order_${dateStr}`);
+  
+  if (!dailyOrder || !Array.isArray(dailyOrder) || dailyOrder.length === 0) {
+    return allCategories;
+  }
+  
+  // Merge: keep daily order for existing categories, append any new ones that aren't in dailyOrder
+  const validDailyOrder = dailyOrder.filter(cat => allCategories.includes(cat));
+  const missingCategories = allCategories.filter(cat => !validDailyOrder.includes(cat));
+  
+  return [...validDailyOrder, ...missingCategories];
+}
+
+/**
+ * Save category order for a specific day.
+ * @param {string} dateStr 
+ * @param {Array<string>} categories 
+ * @returns {Promise<void>}
+ */
+export async function saveDailyCategoryOrder(dateStr, categories) {
+  await set(`category_order_${dateStr}`, categories);
 }
 
 /**
@@ -1512,5 +1915,202 @@ export async function removeFutureHabitInstances(habitId, fromDate) {
   }
 }
 
+// ─── Recurring Templates helpers ───────────────────────────────────────────────
 
+export async function getRecurringTemplates() {
+  return (await get('recurring_templates')) ?? [];
+}
 
+export async function saveRecurringTemplates(templates) {
+  await set('recurring_templates', templates);
+}
+
+export async function addRecurringTemplate(template) {
+  await push('recurring_templates', template);
+}
+
+export async function updateRecurringTemplate(id, patch) {
+  await update('recurring_templates', id, patch);
+}
+
+export async function deleteRecurringTemplate(id) {
+  await remove('recurring_templates', id);
+}
+
+/**
+ * Checks if a given date matches a recurrence pattern.
+ * @param {Date} dateObj
+ * @param {object} pattern { type: 'daily'|'weekdays'|'weekends'|'custom', customDays: number[] }
+ */
+export function matchesRecurrencePattern(dateObj, pattern) {
+  if (!pattern) return false;
+  const day = dateObj.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+  switch (pattern.type) {
+    case 'daily': return true;
+    case 'weekdays': return day >= 1 && day <= 5;
+    case 'weekends': return day === 0 || day === 6;
+    case 'custom': return Array.isArray(pattern.customDays) && pattern.customDays.includes(day);
+    default: return false;
+  }
+}
+
+/**
+ * Generate instances for a template between startDate and endDate.
+ */
+export async function syncRecurringTemplateForRange(template, startDate, endDate) {
+  const dates = [];
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const cur = new Date(sy, sm - 1, sd);
+  const [ey, em, ed] = endDate.split('-').map(Number);
+  const end = new Date(ey, em - 1, ed);
+
+  while (cur <= end) {
+    const y = cur.getFullYear();
+    const m = String(cur.getMonth() + 1).padStart(2, '0');
+    const d = String(cur.getDate()).padStart(2, '0');
+    const dateStr = `${y}-${m}-${d}`;
+
+    if (matchesRecurrencePattern(cur, template.recurrencePattern)) {
+      if (template.exceptions && template.exceptions.includes(dateStr)) {
+        // Skip exception dates
+      } else if (template.itemType === 'task') {
+        const tasks = await getTasks(dateStr);
+        const exists = tasks.some(t => t.recurrenceId === template.recurrenceId);
+        if (!exists) {
+          const newTask = {
+            id: generateId(),
+            title: template.title,
+            done: false,
+            priority: template.priority || 3,
+            timeEstimate: template.timeEstimate || 15,
+            category: template.category || 'Personal',
+            isRecurring: true,
+            recurrencePattern: template.recurrencePattern,
+            recurrenceId: template.recurrenceId
+          };
+          tasks.push(newTask);
+          await setTasks(dateStr, tasks);
+        }
+      } else if (template.itemType === 'block') {
+        const blocks = await getBlocks(dateStr);
+        const exists = blocks.some(b => b.recurrenceId === template.recurrenceId);
+        if (!exists) {
+          const newBlock = {
+            id: generateId(),
+            title: template.title,
+            cat: template.cat || 'Personal',
+            start: template.start,
+            end: template.end,
+            isRecurring: true,
+            recurrencePattern: template.recurrencePattern,
+            recurrenceId: template.recurrenceId,
+            isInfrastructure: template.isInfrastructure || false
+          };
+          blocks.push(newBlock);
+          await setBlocks(dateStr, blocks);
+        }
+      }
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+}
+
+/**
+ * Remove future recurring instances starting from a given date.
+ */
+export async function removeFutureRecurringInstances(recurrenceId, fromDate, itemType) {
+  try {
+    const allStorage = await chrome.storage.local.get(null);
+    for (const key of Object.keys(allStorage)) {
+      if (itemType === 'task' && key.startsWith('tasks_')) {
+        const datePart = key.slice('tasks_'.length);
+        if (datePart >= fromDate) {
+          const tasks = allStorage[key];
+          if (Array.isArray(tasks)) {
+            const filtered = tasks.filter(t => t.recurrenceId !== recurrenceId);
+            if (filtered.length !== tasks.length) {
+              await set(key, filtered);
+            }
+          }
+        }
+      }
+      if (itemType === 'block' && key.startsWith('blocks_')) {
+        const datePart = key.slice('blocks_'.length);
+        if (datePart >= fromDate) {
+          const blocks = allStorage[key];
+          if (Array.isArray(blocks)) {
+            const filtered = blocks.filter(b => b.recurrenceId !== recurrenceId);
+            if (filtered.length !== blocks.length) {
+              await set(key, filtered);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Storage] Error removing future recurring instances:', err);
+  }
+}
+
+/**
+ * Update future recurring instances starting from a given date.
+ */
+export async function updateFutureRecurringInstances(recurrenceId, fromDate, itemType, patch) {
+  try {
+    const allStorage = await chrome.storage.local.get(null);
+    for (const key of Object.keys(allStorage)) {
+      if (itemType === 'task' && key.startsWith('tasks_')) {
+        const datePart = key.slice('tasks_'.length);
+        if (datePart >= fromDate) {
+          const tasks = allStorage[key];
+          if (Array.isArray(tasks)) {
+            let changed = false;
+            for (const t of tasks) {
+              if (t.recurrenceId === recurrenceId) {
+                Object.assign(t, patch);
+                changed = true;
+              }
+            }
+            if (changed) {
+              await set(key, tasks);
+            }
+          }
+        }
+      }
+      if (itemType === 'block' && key.startsWith('blocks_')) {
+        const datePart = key.slice('blocks_'.length);
+        if (datePart >= fromDate) {
+          const blocks = allStorage[key];
+          if (Array.isArray(blocks)) {
+            let changed = false;
+            for (const b of blocks) {
+              if (b.recurrenceId === recurrenceId) {
+                Object.assign(b, patch);
+                changed = true;
+              }
+            }
+            if (changed) {
+              await set(key, blocks);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Storage] Error updating future recurring instances:', err);
+  }
+}
+
+/**
+ * Hook to run when navigating to a specific date to auto-generate missing instances.
+ */
+export async function autoGenerateRecurringInstances(dateStr) {
+  const templates = await getRecurringTemplates();
+  if (!templates || templates.length === 0) return;
+
+  for (const template of templates) {
+    if (!template.startDate || dateStr >= template.startDate) {
+      await syncRecurringTemplateForRange(template, dateStr, dateStr);
+    }
+  }
+}

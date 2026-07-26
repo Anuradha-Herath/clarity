@@ -4,7 +4,7 @@
  * ES Module.
  */
 
-import { get, set, getAuth, jsToFirestore } from './storage.js';
+import { get, set, getAuth, jsToFirestore, formatLocalDate } from './storage.js';
 
 const FIRESTORE_REST_BASE = 'https://firestore.googleapis.com/v1/projects/clarity-app-b599e/databases/(default)/documents';
 
@@ -240,7 +240,7 @@ export async function getUpcomingFixedEvents(userId, fromDate, days) {
   const startRange = fromDate;
   const end = new Date(fromDate + 'T00:00:00');
   end.setDate(end.getDate() + days - 1);
-  const endRange = end.toISOString().slice(0, 10);
+  const endRange = formatLocalDate(end);
 
   return localEvents
     .filter(e => {

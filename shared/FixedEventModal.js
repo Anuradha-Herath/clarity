@@ -4,7 +4,7 @@
  * ES Module.
  */
 
-import { getCustomCategories, getAuth } from './storage.js';
+import { getCustomCategories, getAuth, todayKey } from './storage.js';
 import { addFixedEvent, updateFixedEvent, deleteFixedEvent, toggleFixedEventComplete } from './fixedEventsService.js';
 import { showConfirm, showAlert } from './dialog.js';
 
@@ -476,7 +476,7 @@ export async function openFixedEventModal(eventOrPrefill = null, onSave = null, 
     modalTitle.textContent = 'New Fixed Event';
     titleInput.value = '';
     
-    const prefillDate = eventOrPrefill?.date || new Date().toISOString().slice(0, 10);
+    const prefillDate = eventOrPrefill?.date || todayKey();
     dateInput.value = prefillDate;
     
     multidayCheckbox.checked = false;

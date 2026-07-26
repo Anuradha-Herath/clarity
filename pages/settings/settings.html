@@ -35,16 +35,43 @@
         <section class="card settings-section">
           <h2 class="section-title" style="margin-bottom: var(--space-4);">Daily Rituals</h2>
 
-          <div class="form-group">
-            <label class="label" for="set-morning">Morning ritual time</label>
-            <input type="time" id="set-morning" class="input input-sm" value="07:00" />
-            <span class="text-xs text-muted">Daily reminder to review your vision.</span>
+          <div class="form-group" style="margin-bottom: var(--space-4);">
+            <label class="toggle-row">
+              <span>
+                <span class="toggle-label">Morning Pulse</span>
+                <span class="text-xs text-muted" style="display: block; margin-top: 2px;">Confirm or adjust your plan for the day on waking.</span>
+              </span>
+              <input type="checkbox" id="chk-morning-pulse" class="toggle-input" />
+              <span class="toggle-track"></span>
+            </label>
+            <div style="margin-top: var(--space-2); padding-left: var(--space-6);">
+              <input type="time" id="set-morning" class="input input-sm" value="07:30" />
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-bottom: var(--space-4);">
+            <label class="toggle-row">
+              <span>
+                <span class="toggle-label">Night Nudge</span>
+                <span class="text-xs text-muted" style="display: block; margin-top: 2px;">Pick tomorrow's 3 tasks before bed.</span>
+              </span>
+              <input type="checkbox" id="chk-night-nudge" class="toggle-input" />
+              <span class="toggle-track"></span>
+            </label>
+            <div style="margin-top: var(--space-2); padding-left: var(--space-6);">
+              <input type="time" id="set-night" class="input input-sm" value="21:30" />
+            </div>
           </div>
 
           <div class="form-group">
-            <label class="label" for="set-night">Night review time</label>
-            <input type="time" id="set-night" class="input input-sm" value="22:00" />
-            <span class="text-xs text-muted">Evening prompt to review today and plan tomorrow.</span>
+            <label class="toggle-row">
+              <span>
+                <span class="toggle-label">Re-prompt if dismissed</span>
+                <span class="text-xs text-muted" style="display: block; margin-top: 2px;">Reminds you once after 15 minutes if ignored.</span>
+              </span>
+              <input type="checkbox" id="chk-reprompt" class="toggle-input" />
+              <span class="toggle-track"></span>
+            </label>
           </div>
         </section>
 

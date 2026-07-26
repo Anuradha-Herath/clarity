@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="planner.css" />
 </head>
 <body>
-  <div class="page-wrapper">
+  <div class="page-wrapper planner-wrapper">
 
     <!-- ── Header ─────────────────────────────────────────── -->
     <header class="page-header">
@@ -110,6 +110,25 @@
             </div>
           </div>
 
+          <!-- Today's Habits Widget -->
+          <div class="card mb-4" id="day-habits-card" style="display: none;">
+            <div class="card-header">
+              <div class="card-title" style="gap:6px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-success)">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                Today's Habits
+              </div>
+              <span class="text-xs text-muted" id="day-habits-count">0/0</span>
+            </div>
+            <div class="card-body p-0">
+              <div id="day-habits-list" style="display: flex; flex-direction: column; padding: 4px 8px;">
+                <!-- Dynamically populated via planner.js -->
+              </div>
+            </div>
+          </div>
+
           <!-- Top 3 Priorities -->
           <div class="card mb-4">
             <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
@@ -123,6 +142,7 @@
                 Tasks
               </div>
               <div class="flex items-center gap-2">
+                <button class="btn btn-ghost btn-xs" id="btn-carry-yesterday" style="font-size: 11px; padding: 2px 6px; color: var(--color-accent);" title="Carry forward incomplete tasks from yesterday">Carry From Yesterday</button>
                 <button class="btn btn-ghost btn-xs" id="btn-manage-categories" style="font-size: 11px; padding: 2px 6px;">Manage Cats</button>
                 <span class="text-xs text-muted" id="priority-task-count"></span>
               </div>
@@ -148,9 +168,15 @@
                   <div class="priority-dot-btn" data-p="2" title="Medium priority"></div>
                   <div class="priority-dot-btn" data-p="3" title="Low priority"></div>
                 </div>
-                <select id="quick-add-category-input" class="select select-sm" style="width: 140px; height: 24px; font-size: 11px; padding: 0 4px;">
-                  <!-- Dynamically populated -->
-                </select>
+                <div class="flex gap-2">
+                  <select id="quick-add-category-input" class="select select-sm" style="width: 90px; height: 24px; font-size: 11px; padding: 0 4px;">
+                    <!-- Dynamically populated -->
+                  </select>
+                  <select id="quick-add-goal-input" class="select select-sm" style="width: 110px; height: 24px; font-size: 11px; padding: 0 4px;">
+                    <option value="">No goal</option>
+                    <!-- Dynamically populated -->
+                  </select>
+                </div>
               </div>
               <div class="flex gap-2">
                 <input type="text" id="priority-input" class="input input-sm flex-1"
@@ -303,20 +329,22 @@
 
         <!-- Right sidebar for monthly goals -->
         <div class="month-goals-sidebar" id="month-goals-sidebar">
-          <div class="month-sidebar-header">
-            <h4>Monthly Goals</h4>
-            <span class="month-sidebar-subtitle">Focus & Milestones</span>
-          </div>
-          <div class="month-goals-list" id="month-goals-list">
-            <!-- Will be populated dynamically by JS -->
-          </div>
-          <div class="month-goals-footer" style="margin-bottom: 24px;">
-            <input type="text" id="month-goal-input" class="input input-sm" placeholder="New monthly goal..." maxlength="100" />
-            <button class="btn btn-primary btn-sm" id="btn-add-month-goal">Add</button>
+          <div class="month-goals-section" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+            <div class="month-sidebar-header">
+              <h4>Monthly Goals</h4>
+              <span class="month-sidebar-subtitle">Focus & Milestones</span>
+            </div>
+            <div class="month-goals-list" id="month-goals-list">
+              <!-- Will be populated dynamically by JS -->
+            </div>
+            <div class="month-goals-footer" style="margin-bottom: 12px;">
+              <input type="text" id="month-goal-input" class="input input-sm" placeholder="New monthly goal..." maxlength="100" />
+              <button class="btn btn-primary btn-sm" id="btn-add-month-goal">Add</button>
+            </div>
           </div>
 
           <!-- Month Fixed Events Section -->
-          <div class="month-fixed-events-section" style="border-top: 1px solid var(--color-border); padding-top: 16px; display: flex; flex-direction: column; flex: 1; min-height: 0;">
+          <div class="month-fixed-events-section" style="border-top: 1px solid var(--color-border); padding-top: 12px; display: flex; flex-direction: column; flex: 1; min-height: 0;">
             <div class="month-sidebar-header" style="padding: 0 16px 12px 16px; border-bottom: 1px solid var(--color-border);">
               <h4>Fixed Commitments</h4>
               <span class="month-sidebar-subtitle">Non-negotiable Anchors</span>
@@ -387,6 +415,17 @@
             <!-- Dynamically populated -->
           </select>
         </div>
+        <div class="form-group">
+          <label class="label" for="task-goal-input">Link to Goal</label>
+          <select id="task-goal-input" class="select">
+            <option value="">No goal</option>
+            <!-- Dynamically populated -->
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="label" for="task-date-input">Date</label>
+          <input type="date" id="task-date-input" class="input" />
+        </div>
         <div class="form-row">
           <div class="form-group">
             <label class="label" for="task-priority-input">Priority</label>
@@ -401,13 +440,41 @@
             <input type="number" id="task-estimate-input" class="input" min="5" max="480" step="5" placeholder="30" />
           </div>
         </div>
+        <!-- Repeat Options -->
+        <div class="form-group" style="margin-top:4px; padding-top:12px; border-top:1px solid var(--color-border);">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:var(--color-text);">
+            <input type="checkbox" id="task-repeat-toggle" style="accent-color:var(--color-primary); width:15px; height:15px; cursor:pointer;" />
+            Repeat this task
+          </label>
+          <div id="task-repeat-settings" style="display:none; margin-top:10px; flex-direction:column; gap:10px;">
+            <select id="task-repeat-pattern" class="select" style="font-size:13px;">
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays (Mon-Fri)</option>
+              <option value="weekends">Weekends (Sat-Sun)</option>
+              <option value="custom">Custom days...</option>
+            </select>
+            <div id="task-repeat-custom" style="display:none; gap:6px; flex-wrap:wrap;">
+              <button data-day="1" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Mon</button>
+              <button data-day="2" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Tue</button>
+              <button data-day="3" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Wed</button>
+              <button data-day="4" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Thu</button>
+              <button data-day="5" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Fri</button>
+              <button data-day="6" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Sat</button>
+              <button data-day="0" class="task-day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid var(--color-border); background:var(--color-bg); font-size:11px; cursor:pointer; font-weight:600; color:var(--color-text);">Sun</button>
+            </div>
+          </div>
+        </div>
         <div class="form-group" style="margin-top: 12px; border-top: 1px solid var(--color-border); padding-top: 12px;">
           <label class="label" style="display: flex; justify-content: space-between; align-items: center;">
             Subtasks
             <span class="text-xs text-muted" id="subtask-progress">0/0</span>
           </label>
-          <div class="flex gap-2" style="margin-bottom: 8px;">
+          <div class="flex gap-2" style="margin-bottom: 8px; align-items: center;">
             <input type="text" id="task-subtask-input" class="input flex-1 input-sm" placeholder="Add a subtask…" maxlength="150" />
+            <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+              <input type="number" id="task-subtask-duration" class="input input-sm" min="1" max="480" placeholder="e.g. 30" style="width: 75px; height: 32px; padding: 4px 8px; font-size: 12px;" />
+              <span class="text-xs text-muted">min</span>
+            </div>
             <button class="btn btn-primary btn-sm" id="btn-add-subtask" style="height: 32px; padding: 0 10px;">Add</button>
           </div>
           <div id="modal-subtasks-list" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">

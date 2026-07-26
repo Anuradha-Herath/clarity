@@ -16,13 +16,15 @@ import {
   getBlocks, addBlock, updateBlock, deleteBlock,
   generateId, snapHour, formatHour, timeToDec, decimalToTime, todayKey,
   getCustomCategories,
+  getRecurringTemplates, addRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate,
+  syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances
 } from './storage.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const BOARD_START = 6;    // 6 AM
-const BOARD_END   = 23;   // 11 PM
+const BOARD_END   = 24;   // 12 AM (Midnight)
 const PX_PER_HOUR = 48;   // pixels per hour
-const TOTAL_HOURS = BOARD_END - BOARD_START; // 17
+const TOTAL_HOURS = BOARD_END - BOARD_START; // 18
 
 export function getCategoryColor(cat) {
   const palettes = [
@@ -99,32 +101,43 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   const innerEl = document.createElement('div');
   innerEl.style.cssText = 'display:flex; position:relative;';
 
-  // Labels column (52px wide, one label per hour)
+  // Labels column (56px wide, labels centered on line boundaries)
   const labelsEl = document.createElement('div');
-  labelsEl.style.cssText = 'width:52px; flex-shrink:0;';
-  for (let h = BOARD_START; h < BOARD_END; h++) {
+  labelsEl.style.cssText = 'width:56px; flex-shrink:0; position:relative;';
+  for (let h = BOARD_START; h <= BOARD_END; h++) {
+    const topPx = (h - BOARD_START) * PX_PER_HOUR;
     const lbl = document.createElement('div');
-    lbl.style.cssText = `height:${PX_PER_HOUR}px; display:flex; align-items:flex-start;
-      padding-top:2px; padding-right:8px; font-size:10px; color:#64748B;
-      font-weight:500; justify-content:flex-end; box-sizing:border-box;
-      font-family:inherit;`;
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const disp = h > 12 ? h - 12 : h === 0 ? 12 : h;
+    lbl.style.cssText = `position:absolute; top:${topPx}px; transform:translateY(-50%);
+      right:8px; font-size:11px; color:#475569; font-weight:600;
+      line-height:1; font-family:inherit; white-space:nowrap; pointer-events:none;`;
+    const ampm = h >= 12 && h < 24 ? 'PM' : 'AM';
+    const disp = h > 12 ? (h > 24 ? h - 24 : h - 12) : (h === 0 || h === 24 ? 12 : h);
     lbl.textContent = `${disp} ${ampm}`;
     labelsEl.appendChild(lbl);
+
+    // Half-hour label (subtle :30 mark)
+    if (h < BOARD_END) {
+      const halfTopPx = topPx + (PX_PER_HOUR / 2);
+      const halfLbl = document.createElement('div');
+      halfLbl.style.cssText = `position:absolute; top:${halfTopPx}px; transform:translateY(-50%);
+        right:8px; font-size:9px; color:#94A3B8; font-weight:500;
+        line-height:1; font-family:inherit; white-space:nowrap; pointer-events:none;`;
+      halfLbl.textContent = `:30`;
+      labelsEl.appendChild(halfLbl);
+    }
   }
 
   // Grid (fills remaining width, position:relative for absolute blocks)
   const gridEl = document.createElement('div');
-  gridEl.style.cssText = `flex:1; position:relative; border-left:1px solid #E2E8F0;
+  gridEl.style.cssText = `flex:1; position:relative; border-left:1px solid #CBD5E1;
     height:${TOTAL_HOURS * PX_PER_HOUR}px; overflow:visible;`;
 
   // Slot lines
-  const totalSlots = TOTAL_HOURS * 2; // 34 half-hour slots
+  const totalSlots = TOTAL_HOURS * 2; // 36 half-hour slots
   for (let i = 0; i < totalSlots; i++) {
     const slot = document.createElement('div');
     const isHalf = i % 2 !== 0;
-    slot.style.cssText = `height:${PX_PER_HOUR / 2}px; border-bottom:1px ${isHalf ? 'dashed' : 'solid'} ${isHalf ? '#f1f5f9' : '#E2E8F0'}; box-sizing:border-box;`;
+    slot.style.cssText = `height:${PX_PER_HOUR / 2}px; border-bottom:1px ${isHalf ? 'dashed' : 'solid'} ${isHalf ? '#e2e8f0' : '#CBD5E1'}; box-sizing:border-box;`;
     gridEl.appendChild(slot);
   }
 
@@ -145,7 +158,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   function updateNowLine() {
     const now   = new Date();
     const h     = now.getHours() + now.getMinutes() / 60;
-    const today = now.toISOString().slice(0, 10);
+    const today = todayKey();
     if (date === today && h >= BOARD_START && h <= BOARD_END) {
       nowLineEl.style.top     = hourToPx(h) + 'px';
       nowLineEl.style.display = 'block';
@@ -159,10 +172,69 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   // ── Block rendering ─────────────────────────────────────────────────────────
   function renderBlocks() {
     gridEl.querySelectorAll('[data-block]').forEach(el => el.remove());
+
+    const infraBlocks = [];
+    const normalBlocks = [];
     for (const b of blocks) {
-      const el = makeBlockEl(b);
-      gridEl.appendChild(el);
+      if (b.isInfrastructure) infraBlocks.push(b);
+      else normalBlocks.push(b);
     }
+
+    // Sort normal blocks by start time, then duration
+    normalBlocks.sort((a, b) => {
+      if (a.start === b.start) return (b.end - b.start) - (a.end - a.start);
+      return a.start - b.start;
+    });
+
+    const clusters = [];
+    let currentCluster = [];
+    let clusterEnd = 0;
+
+    for (const b of normalBlocks) {
+      if (currentCluster.length === 0) {
+        currentCluster.push(b);
+        clusterEnd = b.end;
+      } else {
+        if (b.start < clusterEnd) { // overlap
+          currentCluster.push(b);
+          if (b.end > clusterEnd) clusterEnd = b.end;
+        } else {
+          clusters.push(currentCluster);
+          currentCluster = [b];
+          clusterEnd = b.end;
+        }
+      }
+    }
+    if (currentCluster.length > 0) clusters.push(currentCluster);
+
+    for (const cluster of clusters) {
+      const columns = [];
+      for (const b of cluster) {
+        let placed = false;
+        for (const col of columns) {
+          const lastInCol = col[col.length - 1];
+          if (b.start >= lastInCol.end) {
+            col.push(b);
+            b._col = columns.indexOf(col);
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) {
+          b._col = columns.length;
+          columns.push([b]);
+        }
+      }
+      const numCols = columns.length;
+      for (const b of cluster) {
+        b._widthPct = 100 / numCols;
+        b._leftPct = b._col * (100 / numCols);
+      }
+    }
+
+    for (const b of infraBlocks) gridEl.appendChild(makeBlockEl(b));
+    for (const b of normalBlocks) gridEl.appendChild(makeBlockEl(b));
+
     gridEl.appendChild(nowLineEl); // keep now line on top
   }
 
@@ -171,42 +243,75 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     const height = Math.max(PX_PER_HOUR / 2, hourToPx(b.end) - hourToPx(b.start));
     const s      = getCategoryColor(b.cat);
 
+    const isInfra = b.isInfrastructure;
+    const isRecur = b.isRecurring;
+    const isDone  = !!b.completed;
+    const icon = isRecur ? '<span style="font-size:10px; margin-right:4px;" title="Recurring">🔄</span>' : '';
+
     const el = document.createElement('div');
     el.dataset.block = b.id;
+    
+    const leftCss = b._leftPct !== undefined ? `calc(${b._leftPct}% + 2px)` : '2px';
+    const widthCss = b._widthPct !== undefined ? `calc(${b._widthPct}% - 4px)` : 'auto';
+    const rightCss = b._widthPct === undefined ? 'right: 2px;' : '';
+    const zIndex = isInfra ? 1 : 2;
+
     el.style.cssText = `
       position: absolute;
       top: ${top}px;
       height: ${height}px;
-      left: 2px; right: 2px;
-      background: ${s.bg};
-      border-left: 3px solid ${s.acc};
-      color: ${s.txt};
+      left: ${leftCss}; ${rightCss} width: ${widthCss};
+      background: ${isDone ? '#f8fafc' : s.bg};
+      border-left: 4px solid ${isDone ? '#16A34A' : s.acc};
+      color: ${isDone ? '#64748B' : s.txt};
       border-radius: 6px;
       overflow: hidden;
       cursor: default;
       padding: 3px 7px 3px 18px;
       user-select: none;
-      z-index: 2;
+      z-index: ${zIndex};
       box-sizing: border-box;
-      transition: opacity 150ms;
+      transition: opacity 150ms, background 150ms;
+      ${isInfra ? 'opacity: 0.75; filter: grayscale(0.2);' : ''}
+      ${isDone ? 'opacity: 0.85;' : ''}
     `;
     const isSmall = height < 35;
+    const dragHandle = isInfra ? '' : `<div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>`;
+    const resizeHandle = isInfra ? '' : `<div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>`;
+    
+    const checkToggle = `<input type="checkbox" data-complete-toggle ${isDone ? 'checked' : ''} style="margin:0 5px 0 0; cursor:pointer; width:14px; height:14px; accent-color:#16A34A; flex-shrink:0; vertical-align:middle;" title="${isDone ? 'Mark as incomplete' : 'Mark as completed'}" />`;
+    const textStyle = isDone ? 'text-decoration:line-through; opacity:0.75;' : '';
+
     el.innerHTML = isSmall ? `
-      <div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>
-      <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px;cursor:pointer;padding-right:8px;">
-        ${esc(b.title || 'Untitled')}
+      ${dragHandle}
+      <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px;cursor:pointer;padding-right:8px;${isInfra ? 'margin-left:-12px;' : ''};${textStyle}">
+        ${checkToggle}${icon}${esc(b.title || 'Untitled')}
         <span data-time-label style="font-size:9px;font-weight:normal;opacity:0.8;margin-left:4px;">(${formatHour(b.start)} – ${formatHour(b.end)})</span>
       </div>
-      <div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>
+      ${resizeHandle}
     ` : `
-      <div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>
-      <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;">${esc(b.title || 'Untitled')}</div>
-      <div data-time-label style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;">${formatHour(b.start)} – ${formatHour(b.end)}</div>
-      <div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>
+      ${dragHandle}
+      <div style="display:flex; align-items:center; gap:2px; ${isInfra ? 'margin-left:-12px;' : ''}">
+        ${checkToggle}
+        <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;${textStyle}">${icon}${esc(b.title || 'Untitled')}</div>
+      </div>
+      <div data-time-label style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;${isInfra ? 'margin-left:-12px;' : ''}">${formatHour(b.start)} – ${formatHour(b.end)}</div>
+      ${resizeHandle}
     `;
 
+    const chk = el.querySelector('[data-complete-toggle]');
+    if (chk) {
+      chk.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const newStatus = chk.checked;
+        b.completed = newStatus;
+        await updateBlock(date, b.id, { completed: newStatus });
+        await loadBlocks();
+      });
+    }
+
     el.addEventListener('mouseenter', () => { el.style.opacity = '0.88'; });
-    el.addEventListener('mouseleave', () => { el.style.opacity = '1'; });
+    el.addEventListener('mouseleave', () => { el.style.opacity = isDone ? '0.85' : '1'; });
  
     // Click → edit modal
     el.addEventListener('click', (e) => {
@@ -220,12 +325,14 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     });
 
     // Mouse drag to move block - ONLY on drag handle
-    el.querySelector('[data-drag-handle]').addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      e.preventDefault();
-      
-      const startY = e.clientY;
+    const dragHandleEl = el.querySelector('[data-drag-handle]');
+    if (dragHandleEl) {
+      dragHandleEl.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        e.preventDefault();
+        
+        const startY = e.clientY;
       const blockStart = b.start;
       const duration = b.end - b.start;
       
@@ -238,17 +345,19 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
         hasMoved: true
       };
       document.body.style.userSelect = 'none';
-      const handle = el.querySelector('[data-drag-handle]');
-      if (handle) handle.style.cursor = 'grabbing';
-    });
+      });
+    }
  
     // Resize handle mousedown
-    el.querySelector('[data-resize-handle]').addEventListener('mousedown', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      document.body.style.userSelect = 'none';
-      dragResize = { block: b, el, currentEnd: b.end };
-    });
+    const resizeHandleEl = el.querySelector('[data-resize-handle]');
+    if (resizeHandleEl) {
+      resizeHandleEl.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        document.body.style.userSelect = 'none';
+        dragResize = { block: b, el, currentEnd: b.end };
+      });
+    }
  
     return el;
   }
@@ -256,15 +365,21 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   // ── Drag to create ──────────────────────────────────────────────────────────
   function getGridY(e) {
     const rect = gridEl.getBoundingClientRect();
-    return e.clientY - rect.top + boardEl.scrollTop;
+    return e.clientY - rect.top;
+  }
+
+  function getSlotStartHour(e) {
+    const rawH = clampH(pxToHour(getGridY(e)));
+    // Floor to nearest half-hour slot so clicking anywhere in the 6:30 slot gets 6:30 (18.5)
+    return Math.min(BOARD_END - 0.5, Math.floor(rawH * 2) / 2);
   }
 
   gridEl.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     if (e.target.closest('[data-block]')) return;
     e.preventDefault();
-    const startHour = snapHour(clampH(pxToHour(getGridY(e))));
-    dragCreate = { startHour, endHour: startHour + 0.5, ghost: null };
+    const startHour = getSlotStartHour(e);
+    dragCreate = { startHour, endHour: startHour + 0.5, ghost: null, hasDragged: false };
   });
 
   // ── Drag & Drop tasks onto grid ─────────────────────────────────────────────
@@ -281,7 +396,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       const taskData = JSON.parse(dataStr);
       if (!taskData || !taskData.title) return;
 
-      const startHour = snapHour(clampH(pxToHour(getGridY(e))));
+      const startHour = getSlotStartHour(e);
       
       // Snapping to estimate or defaulting to 1 hour
       const duration = taskData.timeEstimate ? Math.max(0.5, snapHour(taskData.timeEstimate / 60)) : 1.0;
@@ -320,22 +435,29 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   function onMouseMove(e) {
     if (dragCreate) {
       const rawEnd = snapHour(clampH(pxToHour(getGridY(e))));
-      dragCreate.endHour = Math.max(dragCreate.startHour + 0.5, rawEnd);
-
-      if (!dragCreate.ghost) {
-        const g = document.createElement('div');
-        g.style.cssText = `position:absolute; left:2px; right:2px;
-          background:#EEF2FF; border:2px dashed #4F46E5; border-radius:6px;
-          opacity:0.75; pointer-events:none; z-index:5; box-sizing:border-box;`;
-        gridEl.appendChild(g);
-        dragCreate.ghost = g;
-        document.body.style.userSelect = 'none';
+      const targetEnd = Math.max(dragCreate.startHour + 0.5, rawEnd);
+      
+      if (targetEnd !== dragCreate.endHour) {
+        dragCreate.endHour = targetEnd;
+        dragCreate.hasDragged = true;
       }
 
-      const s = dragCreate.startHour;
-      const e2 = dragCreate.endHour;
-      dragCreate.ghost.style.top    = hourToPx(s) + 'px';
-      dragCreate.ghost.style.height = Math.max(24, hourToPx(e2) - hourToPx(s)) + 'px';
+      if (dragCreate.hasDragged) {
+        if (!dragCreate.ghost) {
+          const g = document.createElement('div');
+          g.style.cssText = `position:absolute; left:2px; right:2px;
+            background:#EEF2FF; border:2px dashed #4F46E5; border-radius:6px;
+            opacity:0.75; pointer-events:none; z-index:5; box-sizing:border-box;`;
+          gridEl.appendChild(g);
+          dragCreate.ghost = g;
+          document.body.style.userSelect = 'none';
+        }
+
+        const s = dragCreate.startHour;
+        const e2 = dragCreate.endHour;
+        dragCreate.ghost.style.top    = hourToPx(s) + 'px';
+        dragCreate.ghost.style.height = Math.max(24, hourToPx(e2) - hourToPx(s)) + 'px';
+      }
     }
 
     if (dragResize) {
@@ -426,20 +548,73 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   function openBlockModal(block, isNew) {
     modal.show(block, isNew, {
-      onSave: async (updated) => {
+      onSave: async (updated, editMode) => {
         if (isNew) {
-          await addBlock(date, updated);
+          if (updated.isRecurring) {
+            updated.recurrenceId = generateId();
+            const template = {
+              id: generateId(),
+              recurrenceId: updated.recurrenceId,
+              itemType: 'block',
+              startDate: date,
+              title: updated.title,
+              cat: updated.cat,
+              start: updated.start,
+              end: updated.end,
+              recurrencePattern: updated.recurrencePattern,
+              isInfrastructure: updated.isInfrastructure
+            };
+            await addRecurringTemplate(template);
+            
+            const endObj = new Date(date);
+            endObj.setDate(endObj.getDate() + 60);
+            const y = endObj.getFullYear();
+            const m = String(endObj.getMonth() + 1).padStart(2, '0');
+            const d = String(endObj.getDate()).padStart(2, '0');
+            await syncRecurringTemplateForRange(template, date, `${y}-${m}-${d}`);
+          } else {
+            await addBlock(date, updated);
+          }
           registerAlarm(updated, date);
         } else {
-          await updateBlock(date, updated.id, updated);
+          if (editMode === 'following') {
+            await updateFutureRecurringInstances(updated.recurrenceId, date, 'block', updated);
+            const templates = await getRecurringTemplates();
+            const t = templates.find(x => x.recurrenceId === updated.recurrenceId);
+            if (t) {
+              Object.assign(t, {
+                title: updated.title, cat: updated.cat, start: updated.start, end: updated.end,
+                recurrencePattern: updated.recurrencePattern, isInfrastructure: updated.isInfrastructure
+              });
+              await updateRecurringTemplate(t.id, t);
+            }
+          } else {
+            await updateBlock(date, updated.id, updated);
+          }
           cancelAlarm(updated.id);
           registerAlarm(updated, date);
         }
         modal.hide();
         await loadBlocks();
       },
-      onDelete: async () => {
-        await deleteBlock(date, block.id);
+      onDelete: async (editMode) => {
+        if (editMode === 'following') {
+          await removeFutureRecurringInstances(block.recurrenceId, date, 'block');
+          const templates = await getRecurringTemplates();
+          const t = templates.find(x => x.recurrenceId === block.recurrenceId);
+          if (t) await deleteRecurringTemplate(t.id);
+        } else {
+          await deleteBlock(date, block.id);
+          if (block.isRecurring && block.recurrenceId) {
+            const templates = await getRecurringTemplates();
+            const t = templates.find(x => x.recurrenceId === block.recurrenceId);
+            if (t) {
+              if (!t.exceptions) t.exceptions = [];
+              if (!t.exceptions.includes(date)) t.exceptions.push(date);
+              await updateRecurringTemplate(t.id, { exceptions: t.exceptions });
+            }
+          }
+        }
         cancelAlarm(block.id);
         modal.hide();
         await loadBlocks();
@@ -544,6 +719,41 @@ function buildBlockModal() {
                           font-size:14px; font-family:inherit; color:#1E293B; outline:none; box-sizing:border-box;" />
           </div>
         </div>
+        <!-- Repeat Options -->
+        <div style="margin-top:4px; padding-top:12px; border-top:1px solid #E2E8F0;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#1E293B;">
+            <input type="checkbox" data-repeat-toggle style="accent-color:#4F46E5; width:15px; height:15px; cursor:pointer;" />
+            Repeat this block
+          </label>
+          <div data-repeat-settings style="display:none; margin-top:10px; flex-direction:column; gap:10px;">
+            <select data-repeat-pattern style="width:100%; padding:8px 12px; border:1px solid #E2E8F0; border-radius:6px; font-size:13px; font-family:inherit; color:#1E293B; outline:none; background:#fff;">
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays (Mon-Fri)</option>
+              <option value="weekends">Weekends (Sat-Sun)</option>
+              <option value="custom">Custom days...</option>
+            </select>
+            <div data-repeat-custom style="display:none; gap:6px; flex-wrap:wrap;">
+              <button data-day="1" class="day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid #E2E8F0; background:#fff; font-size:11px; cursor:pointer; font-weight:600;">Mon</button>
+              <button data-day="2" class="day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid #E2E8F0; background:#fff; font-size:11px; cursor:pointer; font-weight:600;">Tue</button>
+              <button data-day="3" class="day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid #E2E8F0; background:#fff; font-size:11px; cursor:pointer; font-weight:600;">Wed</button>
+              <button data-day="4" class="day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid #E2E8F0; background:#fff; font-size:11px; cursor:pointer; font-weight:600;">Thu</button>
+              <button data-day="5" class="day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid #E2E8F0; background:#fff; font-size:11px; cursor:pointer; font-weight:600;">Fri</button>
+              <button data-day="6" class="day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid #E2E8F0; background:#fff; font-size:11px; cursor:pointer; font-weight:600;">Sat</button>
+              <button data-day="0" class="day-pill" style="padding:4px 8px; border-radius:6px; border:1px solid #E2E8F0; background:#fff; font-size:11px; cursor:pointer; font-weight:600;">Sun</button>
+            </div>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; color:#64748B; margin-top:4px;">
+              <input type="checkbox" data-is-routine style="accent-color:#4F46E5; width:14px; height:14px; cursor:pointer;" />
+              This is a routine (no completion tracking)
+            </label>
+          </div>
+        </div>
+        <!-- Completion Option -->
+        <div style="margin-top:4px; padding-top:10px; border-top:1px solid #E2E8F0;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#1E293B;">
+            <input type="checkbox" data-completed-toggle style="accent-color:#16A34A; width:15px; height:15px; cursor:pointer;" />
+            Mark as completed ✓
+          </label>
+        </div>
       </div>
       <!-- Footer -->
       <div style="display:flex; align-items:center; justify-content:space-between;
@@ -597,6 +807,39 @@ function buildBlockModal() {
   let curBlock   = null;
 
   const q = (sel) => overlay.querySelector(sel);
+  
+  const repeatToggle = q('[data-repeat-toggle]');
+  const repeatSettings = q('[data-repeat-settings]');
+  const repeatPattern = q('[data-repeat-pattern]');
+  const repeatCustom = q('[data-repeat-custom]');
+  const isRoutine = q('[data-is-routine]');
+  let customDays = new Set();
+  
+  repeatToggle.addEventListener('change', () => {
+    repeatSettings.style.display = repeatToggle.checked ? 'flex' : 'none';
+  });
+  
+  repeatPattern.addEventListener('change', () => {
+    repeatCustom.style.display = repeatPattern.value === 'custom' ? 'flex' : 'none';
+  });
+  
+  overlay.querySelectorAll('.day-pill').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const day = parseInt(btn.dataset.day);
+      if (customDays.has(day)) {
+        customDays.delete(day);
+        btn.style.background = '#fff';
+        btn.style.borderColor = '#E2E8F0';
+        btn.style.color = 'inherit';
+      } else {
+        customDays.add(day);
+        btn.style.background = '#4F46E5';
+        btn.style.borderColor = '#4F46E5';
+        btn.style.color = '#fff';
+      }
+    });
+  });
 
   function hide() {
     overlay.classList.add('hidden');
@@ -615,10 +858,37 @@ function buildBlockModal() {
     const start = startStr ? snapHour(clampH(timeToDec(startStr))) : curBlock.start;
     const rawEnd = endStr   ? snapHour(clampH(timeToDec(endStr)))   : curBlock.end;
     const end = Math.max(start + 0.5, rawEnd);
-    onSaveCb?.({ ...curBlock, title, cat: selCat, start, end });
+    
+    const isRecurring = repeatToggle.checked;
+    const recurrencePattern = isRecurring ? {
+      type: repeatPattern.value,
+      customDays: repeatPattern.value === 'custom' ? Array.from(customDays) : []
+    } : null;
+    const isInfrastructure = isRoutine.checked;
+    const completed = q('[data-completed-toggle]').checked;
+    
+    const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure, completed };
+    
+    if (curBlock.isRecurring && curBlock.id && window.confirm("This is a recurring block.\n\nPress OK to apply changes to ALL FUTURE blocks in this series.\nPress Cancel to apply changes ONLY to this block.")) {
+      onSaveCb?.(updated, 'following');
+    } else if (curBlock.isRecurring && curBlock.id) {
+      onSaveCb?.(updated, 'only-this');
+    } else {
+      onSaveCb?.(updated, 'only-this');
+    }
   });
 
-  q('[data-btn-delete]').addEventListener('click', () => { onDeleteCb?.(); });
+  q('[data-btn-delete]').addEventListener('click', () => { 
+    if (curBlock.isRecurring) {
+      if (window.confirm("Delete ALL FUTURE blocks in this series? (Cancel will delete only this one)")) {
+        onDeleteCb?.('following');
+      } else {
+        onDeleteCb?.('only-this');
+      }
+    } else {
+      onDeleteCb?.('only-this'); 
+    }
+  });
 
   titleInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); q('[data-btn-save]').click(); }
@@ -638,6 +908,32 @@ function buildBlockModal() {
     q('[data-start]').value     = decimalToTime(block.start);
     q('[data-end]').value       = decimalToTime(block.end);
     q('[data-btn-delete]').style.display = isNew ? 'none' : '';
+    
+    repeatToggle.checked = !!block.isRecurring;
+    repeatSettings.style.display = block.isRecurring ? 'flex' : 'none';
+    repeatPattern.value = block.recurrencePattern?.type || 'daily';
+    repeatCustom.style.display = repeatPattern.value === 'custom' ? 'flex' : 'none';
+    isRoutine.checked = !!block.isInfrastructure;
+    q('[data-completed-toggle]').checked = !!block.completed;
+    
+    customDays.clear();
+    overlay.querySelectorAll('.day-pill').forEach(btn => {
+      btn.style.background = '#fff';
+      btn.style.borderColor = '#E2E8F0';
+      btn.style.color = 'inherit';
+    });
+    
+    if (block.recurrencePattern?.customDays) {
+      block.recurrencePattern.customDays.forEach(d => {
+        customDays.add(d);
+        const btn = overlay.querySelector(`.day-pill[data-day="${d}"]`);
+        if (btn) {
+          btn.style.background = '#4F46E5';
+          btn.style.borderColor = '#4F46E5';
+          btn.style.color = '#fff';
+        }
+      });
+    }
 
     // Populate category buttons dynamically
     categories = await getCustomCategories();

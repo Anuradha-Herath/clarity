@@ -1,7 +1,22 @@
 /* ============================================================
    Clarity — pages/planner.css
-   Styles for the 4-tab planner page.
+   Styles specific to the Planner page.
    ============================================================ */
+
+/* ── Planner page fills viewport so inner columns scroll ─── */
+.planner-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.planner-wrapper .tab-panel.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
 
 /* ── Tab panels fill page below tab bar ───────────────────── */
 .tab-panel {
@@ -166,7 +181,31 @@
   color: var(--color-danger);
 }
 
-.priority-item-add-subtask {
+.subtask-item-delete {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transition: opacity var(--transition), background var(--transition);
+  margin-left: auto;
+}
+
+.subtask-item:hover .subtask-item-delete {
+  opacity: 1;
+}
+
+.subtask-item-delete:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.priority-item-add-subtask,
+.priority-item-details {
   width: 22px;
   height: 22px;
   border-radius: 4px;
@@ -179,13 +218,24 @@
   transition: opacity var(--transition), background var(--transition);
 }
 
-.priority-item:hover .priority-item-add-subtask {
+.priority-item:hover .priority-item-add-subtask,
+.priority-item:hover .priority-item-details {
   opacity: 1;
+}
+
+.priority-item-add-subtask:hover,
+.priority-item-details:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
 }
 
 .priority-item-add-subtask:hover {
   background: var(--color-accent-soft);
   color: var(--color-accent);
+}
+
+.subtask-list-add-btn:hover {
+  color: var(--color-text) !important;
 }
 
 /* Priority quick-add row */
@@ -331,6 +381,21 @@
 .week-col.drag-over {
   background: var(--color-accent-soft) !important;
   box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+
+.priority-item.drag-over-task {
+  border: 2px dashed var(--color-accent) !important;
+  background-color: var(--color-surface-hover);
+}
+
+.category-group.drag-over-category-top {
+  border-top: 2px dashed var(--color-accent) !important;
+  background-color: var(--color-surface-hover);
+}
+
+.category-group.drag-over-category-bottom {
+  border-bottom: 2px dashed var(--color-accent) !important;
+  background-color: var(--color-surface-hover);
 }
 
 .week-col:last-child {
