@@ -2114,3 +2114,109 @@ export async function autoGenerateRecurringInstances(dateStr) {
     }
   }
 }
+
+// ─── Auto-Reschedule & Rolling Queue Helpers ─────────────────────────────────
+
+/**
+ * Find the next available free time slot of `duration` hours on `dateStr` starting from `startFromHour`.
+ * @param {string} dateStr "YYYY-MM-DD"
+ * @param {number} duration Duration in hours (e.g., 0.5 for 30 min)
+ * @param {number} startFromHour Decimal hour to start searching from (e.g., 12.5 for 12:30 PM)
+ * @param {Array<string>} ignoreBlockIds Optional list of block IDs to ignore (e.g. blocks being moved)
+ * @returns {Promise<{start: number, end: number}|null>}
+ */
+export async function findNextFreeSlot(dateStr, duration, startFromHour = 6, ignoreBlockIds = []) {
+  const blocks = (await getBlocks(dateStr)) ?? [];
+  const activeBlocks = blocks
+    .filter(b => !ignoreBlockIds.includes(b.id))
+    .sort((a, b) => a.start - b.start);
+
+  const STEP = 0.25; // check every 15 mins
+  const BOARD_START = 6;
+  const BOARD_END = 24;
+
+  let currentCandidate = Math.max(BOARD_START, Math.ceil(startFromHour * 4) / 4);
+
+  while (currentCandidate + duration <= BOARD_END) {
+    const candidateEnd = currentCandidate + duration;
+    let overlaps = false;
+
+    for (const b of activeBlocks) {
+      // Overlap check
+      if (Math.max(currentCandidate, b.start) < Math.min(candidateEnd, b.end)) {
+        overlaps = true;
+        // Fast forward to end of overlapping block
+        currentCandidate = Math.ceil(b.end * 4) / 4;
+        break;
+      }
+    }
+
+    if (!overlaps) {
+      return { start: currentCandidate, end: candidateEnd };
+    }
+  }
+
+  return null; // No available slot found on this date
+}
+
+/**
+ * Auto-reschedules specified blocks on `dateStr` into open free slots after `startFromHour`.
+ * @param {string} dateStr "YYYY-MM-DD"
+ * @param {Array<string>} blockIds Array of block IDs to reschedule
+ * @param {number} startFromHour Starting decimal hour
+ * @returns {Promise<Array<object>>} Updated blocks
+ */
+export async function autoRescheduleBlocks(dateStr, blockIds, startFromHour) {
+  let blocks = (await getBlocks(dateStr)) ?? [];
+  if (!blockIds || blockIds.length === 0) return blocks;
+
+  const targetBlocks = blocks.filter(b => blockIds.includes(b.id));
+
+  for (const b of targetBlocks) {
+    const duration = Math.max(0.25, (b.end ?? 0.5) - (b.start ?? 0));
+    const freeSlot = await findNextFreeSlot(dateStr, duration, startFromHour, [b.id]);
+    
+    if (freeSlot) {
+      b.start = freeSlot.start;
+      b.end = freeSlot.end;
+      b.rescheduled = true;
+      b.rescheduledFrom = b.start;
+      startFromHour = freeSlot.end; // next task schedules after this one
+    }
+  }
+
+  await setBlocks(dateStr, blocks);
+  return blocks;
+}
+
+/**
+ * Defer specified blocks from `fromDateStr` to `toDateStr`.
+ * @param {string} fromDateStr "YYYY-MM-DD"
+ * @param {string} toDateStr "YYYY-MM-DD"
+ * @param {Array<string>} blockIds Array of block IDs to move
+ * @returns {Promise<void>}
+ */
+export async function deferBlocksToDate(fromDateStr, toDateStr, blockIds) {
+  let fromBlocks = (await getBlocks(fromDateStr)) ?? [];
+  let toBlocks = (await getBlocks(toDateStr)) ?? [];
+
+  const blocksToMove = fromBlocks.filter(b => blockIds.includes(b.id));
+  fromBlocks = fromBlocks.filter(b => !blockIds.includes(b.id));
+
+  for (const b of blocksToMove) {
+    const duration = (b.end ?? 0.5) - (b.start ?? 0);
+    // Find free slot tomorrow starting from original start or 9 AM
+    const freeSlot = await findNextFreeSlot(toDateStr, duration, b.start || 9);
+    if (freeSlot) {
+      b.start = freeSlot.start;
+      b.end = freeSlot.end;
+    }
+    b.deferred = true;
+    b.deferredFromDate = fromDateStr;
+    toBlocks.push(b);
+  }
+
+  await setBlocks(fromDateStr, fromBlocks);
+  await setBlocks(toDateStr, toBlocks);
+}
+

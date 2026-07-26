@@ -13,11 +13,12 @@
  */
 
 import {
-  getBlocks, addBlock, updateBlock, deleteBlock,
+  getBlocks, addBlock, updateBlock, deleteBlock, setBlocks,
   generateId, snapHour, formatHour, timeToDec, decimalToTime, todayKey,
   getCustomCategories,
   getRecurringTemplates, addRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate,
-  syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances
+  syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances,
+  findNextFreeSlot, autoRescheduleBlocks, deferBlocksToDate
 } from './storage.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -84,6 +85,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   let date   = initialDate;
   let blocks = [];
+  let bannerDismissed = false;
 
   // Drag state
   let dragCreate = null; // { startHour, endHour, ghost }
@@ -94,6 +96,26 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   // ── Build board skeleton ────────────────────────────────────────────────────
   containerEl.innerHTML = '';
   containerEl.style.position = 'relative';
+
+  // Rolling Queue Banner Top Bar
+  const bannerWrapper = document.createElement('div');
+  bannerWrapper.style.cssText = 'padding: 8px 12px 0 56px; display: none;';
+  
+  const bannerEl = document.createElement('div');
+  bannerEl.style.cssText = `
+    background: linear-gradient(135deg, #FEF2F2, #FFF7ED);
+    border: 1px solid #FCA5A5;
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    box-shadow: 0 2px 8px rgba(225, 29, 72, 0.08);
+  `;
+  bannerWrapper.appendChild(bannerEl);
+  containerEl.appendChild(bannerWrapper);
 
   const boardEl = document.createElement('div');
   boardEl.style.cssText = 'height:100%; overflow-y:auto; overflow-x:hidden; position:relative;';
@@ -154,6 +176,13 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   boardEl.appendChild(innerEl);
   containerEl.appendChild(boardEl);
 
+  // Helper date function
+  function getTomorrowKey(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  }
+
   // ── Now line updater ────────────────────────────────────────────────────────
   function updateNowLine() {
     const now   = new Date();
@@ -178,6 +207,64 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     for (const b of blocks) {
       if (b.isInfrastructure) infraBlocks.push(b);
       else normalBlocks.push(b);
+    }
+
+    // Detect missed tasks for Rolling Queue Banner
+    const now = new Date();
+    const currentDec = now.getHours() + now.getMinutes() / 60;
+    const isToday = date === todayKey();
+    const isPastDate = date < todayKey();
+
+    const missedBlocks = normalBlocks.filter(b => {
+      if (b.completed) return false;
+      return (isToday && b.end <= currentDec) || isPastDate;
+    });
+
+    if (missedBlocks.length > 0 && !bannerDismissed) {
+      bannerWrapper.style.display = 'block';
+      bannerEl.innerHTML = `
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:16px;">⚡</span>
+          <div>
+            <div style="font-size:13px; font-weight:700; color:#991B1B;">
+              ${missedBlocks.length} Missed Task${missedBlocks.length > 1 ? 's' : ''} Past Scheduled Time
+            </div>
+            <div style="font-size:11px; color:#7F1D1D; opacity:0.85;">
+              ${missedBlocks.map(b => esc(b.title || 'Untitled')).slice(0, 3).join(', ')}${missedBlocks.length > 3 ? ` +${missedBlocks.length - 3} more` : ''}
+            </div>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button data-auto-reschedule-all style="background:#E11D48; color:#FFF; border:none; border-radius:6px; padding:6px 12px; font-size:12px; font-weight:600; cursor:pointer; box-shadow:0 1px 3px rgba(225,29,72,0.3);">
+            ⚡ Auto-Reschedule All
+          </button>
+          <button data-defer-all style="background:#FFF; color:#475569; border:1px solid #CBD5E1; border-radius:6px; padding:6px 10px; font-size:12px; font-weight:500; cursor:pointer;">
+            🌅 Defer to Tomorrow
+          </button>
+          <button data-dismiss-banner style="background:transparent; color:#94A3B8; border:none; font-size:14px; cursor:pointer; padding:4px;" title="Dismiss notification">
+            ✕
+          </button>
+        </div>
+      `;
+
+      bannerEl.querySelector('[data-auto-reschedule-all]')?.addEventListener('click', async () => {
+        const startFrom = isToday ? Math.max(BOARD_START, currentDec) : BOARD_START;
+        await autoRescheduleBlocks(date, missedBlocks.map(b => b.id), startFrom);
+        await loadBlocks();
+      });
+
+      bannerEl.querySelector('[data-defer-all]')?.addEventListener('click', async () => {
+        const tomorrow = getTomorrowKey(date);
+        await deferBlocksToDate(date, tomorrow, missedBlocks.map(b => b.id));
+        await loadBlocks();
+      });
+
+      bannerEl.querySelector('[data-dismiss-banner]')?.addEventListener('click', () => {
+        bannerDismissed = true;
+        bannerWrapper.style.display = 'none';
+      });
+    } else {
+      bannerWrapper.style.display = 'none';
     }
 
     // Sort normal blocks by start time, then duration
@@ -248,6 +335,15 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     const isDone  = !!b.completed;
     const icon = isRecur ? '<span style="font-size:10px; margin-right:4px;" title="Recurring">🔄</span>' : '';
 
+    const now = new Date();
+    const currentDec = now.getHours() + now.getMinutes() / 60;
+    const isToday = date === todayKey();
+    const isPastDate = date < todayKey();
+    const isMissed = !isDone && !isInfra && ((isToday && b.end <= currentDec) || isPastDate);
+
+    const missedBadge = isMissed ? '<span style="font-size:9px;font-weight:700;color:#E11D48;background:#FFE4E6;padding:1px 4px;border-radius:3px;margin-left:4px;border:1px solid #FDA4AF;">Missed</span>' : '';
+    const bumpBtnHtml = isMissed ? `<button data-bump-btn style="background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; border-radius:4px; font-size:10px; font-weight:600; padding:1px 6px; cursor:pointer; margin-left:6px;" title="Push to next free slot today">⏩ Bump</button>` : '';
+
     const el = document.createElement('div');
     el.dataset.block = b.id;
     
@@ -261,8 +357,8 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       top: ${top}px;
       height: ${height}px;
       left: ${leftCss}; ${rightCss} width: ${widthCss};
-      background: ${isDone ? '#f8fafc' : s.bg};
-      border-left: 4px solid ${isDone ? '#16A34A' : s.acc};
+      background: ${isDone ? '#f8fafc' : (isMissed ? '#FEF2F2' : s.bg)};
+      border-left: 4px solid ${isDone ? '#16A34A' : (isMissed ? '#E11D48' : s.acc)};
       color: ${isDone ? '#64748B' : s.txt};
       border-radius: 6px;
       overflow: hidden;
@@ -274,6 +370,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       transition: opacity 150ms, background 150ms;
       ${isInfra ? 'opacity: 0.75; filter: grayscale(0.2);' : ''}
       ${isDone ? 'opacity: 0.85;' : ''}
+      ${isMissed ? 'outline: 1px dashed #FCA5A5;' : ''}
     `;
     const isSmall = height < 35;
     const dragHandle = isInfra ? '' : `<div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>`;
@@ -285,7 +382,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     el.innerHTML = isSmall ? `
       ${dragHandle}
       <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px;cursor:pointer;padding-right:8px;${isInfra ? 'margin-left:-12px;' : ''};${textStyle}">
-        ${checkToggle}${icon}${esc(b.title || 'Untitled')}
+        ${checkToggle}${icon}${esc(b.title || 'Untitled')}${missedBadge}${bumpBtnHtml}
         <span data-time-label style="font-size:9px;font-weight:normal;opacity:0.8;margin-left:4px;">(${formatHour(b.start)} – ${formatHour(b.end)})</span>
       </div>
       ${resizeHandle}
@@ -293,11 +390,30 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       ${dragHandle}
       <div style="display:flex; align-items:center; gap:2px; ${isInfra ? 'margin-left:-12px;' : ''}">
         ${checkToggle}
-        <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;${textStyle}">${icon}${esc(b.title || 'Untitled')}</div>
+        <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;${textStyle}">${icon}${esc(b.title || 'Untitled')} ${missedBadge}${bumpBtnHtml}</div>
       </div>
       <div data-time-label style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;${isInfra ? 'margin-left:-12px;' : ''}">${formatHour(b.start)} – ${formatHour(b.end)}</div>
       ${resizeHandle}
     `;
+
+    const bumpEl = el.querySelector('[data-bump-btn]');
+    if (bumpEl) {
+      bumpEl.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const duration = Math.max(0.25, b.end - b.start);
+        const startFrom = isToday ? Math.max(BOARD_START, currentDec) : BOARD_START;
+        const freeSlot = await findNextFreeSlot(date, duration, startFrom, [b.id]);
+        if (freeSlot) {
+          b.start = freeSlot.start;
+          b.end = freeSlot.end;
+          b.rescheduled = true;
+          await updateBlock(date, b.id, { start: freeSlot.start, end: freeSlot.end, rescheduled: true });
+          await loadBlocks();
+        } else {
+          alert('No open slot remaining today. Try deferring to tomorrow!');
+        }
+      });
+    }
 
     const chk = el.querySelector('[data-complete-toggle]');
     if (chk) {
