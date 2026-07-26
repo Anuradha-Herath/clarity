@@ -426,8 +426,16 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
           </button>
         `;
 
+        alertEl.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+        });
+        alertEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+        });
+
         alertEl.querySelector('[data-add-gap-btn]')?.addEventListener('click', async (e) => {
           e.stopPropagation();
+          e.preventDefault();
           const shiftHours = activeBufferMins / 60;
           next.start += shiftHours;
           next.end += shiftHours;
@@ -638,7 +646,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   gridEl.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-    if (e.target.closest('[data-block]')) return;
+    if (e.target.closest('[data-block]') || e.target.closest('[data-buffer-indicator]')) return;
     e.preventDefault();
     const startHour = getSlotStartHour(e);
     dragCreate = { startHour, endHour: startHour + 0.5, ghost: null, hasDragged: false };
