@@ -111,12 +111,12 @@ export function dateKey(days = 0) {
 }
 
 /**
- * Snap a decimal hour value to the nearest 0.5 increment (30-min slots).
+ * Snap a decimal hour value to the nearest 0.25 increment (15-min slots).
  * @param {number} h
  * @returns {number}
  */
 export function snapHour(h) {
-  return Math.round(h * 2) / 2;
+  return Math.round(h * 4) / 4;
 }
 
 /**
@@ -2161,32 +2161,61 @@ export async function findNextFreeSlot(dateStr, duration, startFromHour = 6, ign
 
 /**
  * Auto-reschedules specified blocks on `dateStr` into open free slots after `startFromHour`.
+ * Inserts a 15-minute transition/rest buffer between consecutive tasks.
+ * Automatically defers overflow tasks beyond evening limit (9 PM / max 3 evening tasks) to tomorrow.
  * @param {string} dateStr "YYYY-MM-DD"
  * @param {Array<string>} blockIds Array of block IDs to reschedule
  * @param {number} startFromHour Starting decimal hour
- * @returns {Promise<Array<object>>} Updated blocks
+ * @param {number} bufferHours Buffer duration between tasks (default 0.25 = 15 mins)
+ * @returns {Promise<{rescheduledCount: number, deferredCount: number}>} Summary of actions taken
  */
-export async function autoRescheduleBlocks(dateStr, blockIds, startFromHour) {
+export async function autoRescheduleBlocks(dateStr, blockIds, startFromHour, bufferHours = 0.25) {
   let blocks = (await getBlocks(dateStr)) ?? [];
-  if (!blockIds || blockIds.length === 0) return blocks;
+  if (!blockIds || blockIds.length === 0) return { rescheduledCount: 0, deferredCount: 0 };
 
   const targetBlocks = blocks.filter(b => blockIds.includes(b.id));
 
+  const EVENING_CUTOFF = 21.0; // 9:00 PM max limit for focus work
+  const MAX_TODAY_RESCHEDULE = 3; // Max 3 tasks allowed to be added to evening to prevent burnout
+  
+  let rescheduledCount = 0;
+  const overflowBlockIds = [];
+
   for (const b of targetBlocks) {
+    if (rescheduledCount >= MAX_TODAY_RESCHEDULE) {
+      overflowBlockIds.push(b.id);
+      continue;
+    }
+
     const duration = Math.max(0.25, (b.end ?? 0.5) - (b.start ?? 0));
     const freeSlot = await findNextFreeSlot(dateStr, duration, startFromHour, [b.id]);
-    
-    if (freeSlot) {
+
+    if (freeSlot && freeSlot.end <= EVENING_CUTOFF) {
       b.start = freeSlot.start;
       b.end = freeSlot.end;
       b.rescheduled = true;
       b.rescheduledFrom = b.start;
-      startFromHour = freeSlot.end; // next task schedules after this one
+      // Insert 15-min transition buffer before next candidate task
+      startFromHour = freeSlot.end + bufferHours;
+      rescheduledCount++;
+    } else {
+      // Cannot fit today cleanly with buffer before cutoff
+      overflowBlockIds.push(b.id);
     }
   }
 
   await setBlocks(dateStr, blocks);
-  return blocks;
+
+  let deferredCount = 0;
+  if (overflowBlockIds.length > 0) {
+    const d = new Date(dateStr + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    const tomorrowStr = d.toISOString().split('T')[0];
+    await deferBlocksToDate(dateStr, tomorrowStr, overflowBlockIds);
+    deferredCount = overflowBlockIds.length;
+  }
+
+  return { rescheduledCount, deferredCount };
 }
 
 /**
@@ -2203,13 +2232,16 @@ export async function deferBlocksToDate(fromDateStr, toDateStr, blockIds) {
   const blocksToMove = fromBlocks.filter(b => blockIds.includes(b.id));
   fromBlocks = fromBlocks.filter(b => !blockIds.includes(b.id));
 
+  let startFrom = 9.0; // Start scheduling tomorrow from 9 AM
+  const BUFFER_HOURS = 0.25;
+
   for (const b of blocksToMove) {
-    const duration = (b.end ?? 0.5) - (b.start ?? 0);
-    // Find free slot tomorrow starting from original start or 9 AM
-    const freeSlot = await findNextFreeSlot(toDateStr, duration, b.start || 9);
+    const duration = Math.max(0.25, (b.end ?? 0.5) - (b.start ?? 0));
+    const freeSlot = await findNextFreeSlot(toDateStr, duration, startFrom);
     if (freeSlot) {
       b.start = freeSlot.start;
       b.end = freeSlot.end;
+      startFrom = freeSlot.end + BUFFER_HOURS;
     }
     b.deferred = true;
     b.deferredFromDate = fromDateStr;
@@ -2219,4 +2251,26 @@ export async function deferBlocksToDate(fromDateStr, toDateStr, blockIds) {
   await setBlocks(fromDateStr, fromBlocks);
   await setBlocks(toDateStr, toBlocks);
 }
+
+// ─── Normal Scheduling Auto-Buffer Preference ─────────────────────────────────
+
+/**
+ * Get current auto-buffer setting in minutes (e.g. 10).
+ * @returns {Promise<number>}
+ */
+export async function getAutoBufferMinutes() {
+  const val = await get('auto_buffer_minutes');
+  return val !== undefined ? Number(val) : 15; // Default 15 minutes
+}
+
+/**
+ * Save auto-buffer setting in minutes.
+ * @param {number} mins 0, 5, 10, or 15
+ * @returns {Promise<void>}
+ */
+export async function setAutoBufferMinutes(mins) {
+  await set('auto_buffer_minutes', Number(mins));
+}
+
+
 

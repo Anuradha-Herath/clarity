@@ -18,7 +18,8 @@ import {
   getCustomCategories,
   getRecurringTemplates, addRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate,
   syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances,
-  findNextFreeSlot, autoRescheduleBlocks, deferBlocksToDate
+  findNextFreeSlot, autoRescheduleBlocks, deferBlocksToDate,
+  getAutoBufferMinutes, setAutoBufferMinutes
 } from './storage.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -86,6 +87,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   let date   = initialDate;
   let blocks = [];
   let bannerDismissed = false;
+  let activeBufferMins = 10;
 
   // Drag state
   let dragCreate = null; // { startHour, endHour, ghost }
@@ -96,6 +98,72 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   // ── Build board skeleton ────────────────────────────────────────────────────
   containerEl.innerHTML = '';
   containerEl.style.position = 'relative';
+
+  // Buffer Control Pill Header Bar
+  const bufferControlBar = document.createElement('div');
+  bufferControlBar.style.cssText = `
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px 6px 56px;
+    background: #F8FAFC;
+    border-bottom: 1px solid #E2E8F0;
+    font-size: 11px;
+    color: #475569;
+  `;
+  bufferControlBar.innerHTML = `
+    <div style="display:flex; align-items:center; gap:6px;">
+      <span style="font-weight:600;">Time Drift Protection:</span>
+      <span style="opacity:0.8;">Auto-inserts rest breaks so schedules stay on track</span>
+    </div>
+    <button data-buffer-pill style="
+      background: #EEF2FF;
+      color: #4F46E5;
+      border: 1px solid #C7D2FE;
+      border-radius: 12px;
+      padding: 2px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 150ms ease;
+    ">
+      🛡️ Buffer: 10m
+    </button>
+  `;
+  containerEl.appendChild(bufferControlBar);
+
+  const bufferPillBtn = bufferControlBar.querySelector('[data-buffer-pill]');
+  function updateBufferPillText() {
+    if (!bufferPillBtn) return;
+    if (activeBufferMins === 0) {
+      bufferPillBtn.textContent = '🛡️ Buffer: Off';
+      bufferPillBtn.style.background = '#F1F5F9';
+      bufferPillBtn.style.color = '#64748B';
+      bufferPillBtn.style.borderColor = '#CBD5E1';
+    } else {
+      bufferPillBtn.textContent = `🛡️ Buffer: ${activeBufferMins}m`;
+      bufferPillBtn.style.background = '#EEF2FF';
+      bufferPillBtn.style.color = '#4F46E5';
+      bufferPillBtn.style.borderColor = '#C7D2FE';
+    }
+  }
+
+  getAutoBufferMinutes().then(m => {
+    activeBufferMins = m;
+    updateBufferPillText();
+  });
+
+  bufferPillBtn?.addEventListener('click', async () => {
+    const options = [15, 30, 0];
+    const idx = options.indexOf(activeBufferMins);
+    activeBufferMins = options[(idx + 1) % options.length];
+    await setAutoBufferMinutes(activeBufferMins);
+    updateBufferPillText();
+    renderBlocks();
+  });
 
   // Rolling Queue Banner Top Bar
   const bannerWrapper = document.createElement('div');
@@ -249,7 +317,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
       bannerEl.querySelector('[data-auto-reschedule-all]')?.addEventListener('click', async () => {
         const startFrom = isToday ? Math.max(BOARD_START, currentDec) : BOARD_START;
-        await autoRescheduleBlocks(date, missedBlocks.map(b => b.id), startFrom);
+        await autoRescheduleBlocks(date, missedBlocks.map(b => b.id), startFrom, activeBufferMins / 60);
         await loadBlocks();
       });
 
@@ -321,6 +389,84 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
     for (const b of infraBlocks) gridEl.appendChild(makeBlockEl(b));
     for (const b of normalBlocks) gridEl.appendChild(makeBlockEl(b));
+
+    // Render visual Rest Buffer Indicators in timeline gaps
+    gridEl.querySelectorAll('[data-buffer-indicator]').forEach(el => el.remove());
+    for (let i = 0; i < normalBlocks.length - 1; i++) {
+      const current = normalBlocks[i];
+      const next = normalBlocks[i + 1];
+      const gapMins = Math.round((next.start - current.end) * 60);
+
+      // If gap is 0 mins (back-to-back), show Tight Schedule alert & 1-click buffer fix button
+      if (gapMins === 0 && activeBufferMins > 0 && !current.completed && !next.completed) {
+        const topPx = hourToPx(next.start);
+        const alertEl = document.createElement('div');
+        alertEl.dataset.bufferIndicator = 'true';
+        alertEl.style.cssText = `
+          position: absolute;
+          top: ${topPx - 10}px;
+          left: 14px;
+          z-index: 25;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background: #FFFBEB;
+          border: 1px solid #FCD34D;
+          border-radius: 12px;
+          padding: 2px 8px;
+          font-size: 10px;
+          font-weight: 600;
+          color: #B45309;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        `;
+        alertEl.innerHTML = `
+          <span>⚠️ Tight Schedule</span>
+          <button data-add-gap-btn style="background:#D97706; color:#FFF; border:none; border-radius:8px; padding:1px 6px; font-size:9px; font-weight:700; cursor:pointer;">
+            ⚡ Add ${activeBufferMins}m Buffer
+          </button>
+        `;
+
+        alertEl.querySelector('[data-add-gap-btn]')?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const shiftHours = activeBufferMins / 60;
+          next.start += shiftHours;
+          next.end += shiftHours;
+          await updateBlock(date, next.id, { start: next.start, end: next.end });
+          await loadBlocks();
+        });
+
+        gridEl.appendChild(alertEl);
+      }
+
+      // If gap is between 5 mins and 30 mins, render a subtle Rest Buffer Indicator
+      if (gapMins >= 5 && gapMins <= 30) {
+        const topPx = hourToPx(current.end);
+        const gapHeight = Math.max(16, hourToPx(next.start) - topPx);
+        
+        const bufEl = document.createElement('div');
+        bufEl.dataset.bufferIndicator = 'true';
+        bufEl.style.cssText = `
+          position: absolute;
+          top: ${topPx}px;
+          height: ${gapHeight}px;
+          left: 2px;
+          right: 2px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(241, 245, 249, 0.75);
+          border: 1px dashed #CBD5E1;
+          border-radius: 4px;
+          color: #64748B;
+          font-size: 10px;
+          font-weight: 600;
+          pointer-events: none;
+          z-index: 1;
+        `;
+        bufEl.innerHTML = `☕ ${gapMins}m Transition Rest`;
+        gridEl.appendChild(bufEl);
+      }
+    }
 
     gridEl.appendChild(nowLineEl); // keep now line on top
   }
