@@ -2272,5 +2272,78 @@ export async function setAutoBufferMinutes(mins) {
   await set('auto_buffer_minutes', Number(mins));
 }
 
+// ─── Most Important Tasks (MIT) Helpers ─────────────────────────────────────
+
+/**
+ * Get MIT object for a date: { taskIds: [id1, id2, id3] }
+ * @param {string} date "YYYY-MM-DD"
+ * @returns {Promise<{taskIds: Array<string>}>}
+ */
+export async function getMIT(date) {
+  const data = await get(`mit_${date}`);
+  return data && Array.isArray(data.taskIds) ? data : { taskIds: [] };
+}
+
+/**
+ * Save MIT object for a date.
+ * @param {string} date "YYYY-MM-DD"
+ * @param {object} mitData { taskIds: [...] }
+ * @returns {Promise<void>}
+ */
+export async function setMIT(date, mitData) {
+  await set(`mit_${date}`, mitData);
+}
+
+/**
+ * Toggle MIT status for a task on a given date. Max 3 per day.
+ * @param {string} date "YYYY-MM-DD"
+ * @param {string} taskId
+ * @returns {Promise<{success: boolean, isMIT?: boolean, reason?: string, message?: string}>}
+ */
+export async function toggleMITTask(date, taskId) {
+  const mit = await getMIT(date);
+  let taskIds = [...(mit.taskIds || [])];
+  const isCurrentlyMIT = taskIds.includes(taskId);
+
+  if (isCurrentlyMIT) {
+    taskIds = taskIds.filter(id => id !== taskId);
+    await setMIT(date, { taskIds });
+    await updateTask(date, taskId, { isMIT: false });
+    return { success: true, isMIT: false, taskIds };
+  } else {
+    if (taskIds.length >= 3) {
+      return {
+        success: false,
+        reason: 'full',
+        message: 'You already have 3 MITs for today. Complete or unmark one first.'
+      };
+    }
+    taskIds.push(taskId);
+    await setMIT(date, { taskIds });
+    await updateTask(date, taskId, { isMIT: true });
+    return { success: true, isMIT: true, taskIds };
+  }
+}
+
+/**
+ * Helper to get user display name for celebration header.
+ * @returns {Promise<string>}
+ */
+export async function getUserDisplayName() {
+  try {
+    const settings = await getSettings();
+    if (settings && (settings.userName || settings.name)) {
+      return settings.userName || settings.name;
+    }
+    const auth = await getAuth();
+    if (auth && auth.email) {
+      const namePart = auth.email.split('@')[0];
+      return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+    }
+  } catch (_) {}
+  return "Anuradha";
+}
+
+
 
 

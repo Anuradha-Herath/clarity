@@ -19,13 +19,14 @@ import {
   getRecurringTemplates, addRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate,
   syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances,
   findNextFreeSlot, autoRescheduleBlocks, deferBlocksToDate,
-  getAutoBufferMinutes, setAutoBufferMinutes
+  getAutoBufferMinutes, setAutoBufferMinutes,
+  getMIT, setMIT, toggleMITTask
 } from './storage.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const BOARD_START = 6;    // 6 AM
 const BOARD_END   = 24;   // 12 AM (Midnight)
-const PX_PER_HOUR = 48;   // pixels per hour
+const PX_PER_HOUR = 64;   // pixels per hour
 const TOTAL_HOURS = BOARD_END - BOARD_START; // 18
 
 export function getCategoryColor(cat) {
@@ -162,7 +163,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     activeBufferMins = options[(idx + 1) % options.length];
     await setAutoBufferMinutes(activeBufferMins);
     updateBufferPillText();
-    renderBlocks();
+    await renderBlocks();
   });
 
   // Rolling Queue Banner Top Bar
@@ -267,7 +268,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   const nowTimer = setInterval(updateNowLine, 30000);
 
   // ── Block rendering ─────────────────────────────────────────────────────────
-  function renderBlocks() {
+  async function renderBlocks() {
     gridEl.querySelectorAll('[data-block]').forEach(el => el.remove());
 
     const infraBlocks = [];
@@ -387,8 +388,11 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       }
     }
 
-    for (const b of infraBlocks) gridEl.appendChild(makeBlockEl(b));
-    for (const b of normalBlocks) gridEl.appendChild(makeBlockEl(b));
+    const mitData = await getMIT(date);
+    const mitTaskIds = mitData.taskIds || [];
+
+    for (const b of infraBlocks) gridEl.appendChild(makeBlockEl(b, mitTaskIds));
+    for (const b of normalBlocks) gridEl.appendChild(makeBlockEl(b, mitTaskIds));
 
     // Render visual Rest Buffer Indicators in timeline gaps
     gridEl.querySelectorAll('[data-buffer-indicator]').forEach(el => el.remove());
@@ -479,7 +483,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     gridEl.appendChild(nowLineEl); // keep now line on top
   }
 
-  function makeBlockEl(b) {
+  function makeBlockEl(b, mitTaskIds = []) {
     const top    = hourToPx(b.start);
     const height = Math.max(PX_PER_HOUR / 2, hourToPx(b.end) - hourToPx(b.start));
     const s      = getCategoryColor(b.cat);
@@ -530,25 +534,44 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     const dragHandle = isInfra ? '' : `<div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>`;
     const resizeHandle = isInfra ? '' : `<div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>`;
     
+    const isMIT = mitTaskIds.includes(b.id);
+    const mitStarBtnHtml = isInfra ? '' : `<button data-mit-star-btn style="background:none; border:none; padding:0 3px; cursor:pointer; font-size:13px; line-height:1; color:${isMIT ? '#4F46E5' : '#94A3B8'}; flex-shrink:0; vertical-align:middle;" title="${isMIT ? 'Remove from Top 3 MIT' : 'Add to Top 3 MIT'}">${isMIT ? '★' : '☆'}</button>`;
+
     const checkToggle = `<input type="checkbox" data-complete-toggle ${isDone ? 'checked' : ''} style="margin:0 5px 0 0; cursor:pointer; width:14px; height:14px; accent-color:#16A34A; flex-shrink:0; vertical-align:middle;" title="${isDone ? 'Mark as incomplete' : 'Mark as completed'}" />`;
     const textStyle = isDone ? 'text-decoration:line-through; opacity:0.75;' : '';
 
     el.innerHTML = isSmall ? `
       ${dragHandle}
       <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px;cursor:pointer;padding-right:8px;${isInfra ? 'margin-left:-12px;' : ''};${textStyle}">
-        ${checkToggle}${icon}${esc(b.title || 'Untitled')}${missedBadge}${bumpBtnHtml}
+        ${checkToggle}${mitStarBtnHtml}${icon}${esc(b.title || 'Untitled')}${missedBadge}${bumpBtnHtml}
         <span data-time-label style="font-size:9px;font-weight:normal;opacity:0.8;margin-left:4px;">(${formatHour(b.start)} – ${formatHour(b.end)})</span>
       </div>
       ${resizeHandle}
     ` : `
       ${dragHandle}
       <div style="display:flex; align-items:center; gap:2px; ${isInfra ? 'margin-left:-12px;' : ''}">
-        ${checkToggle}
+        ${checkToggle}${mitStarBtnHtml}
         <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;${textStyle}">${icon}${esc(b.title || 'Untitled')} ${missedBadge}${bumpBtnHtml}</div>
       </div>
       <div data-time-label style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;${isInfra ? 'margin-left:-12px;' : ''}">${formatHour(b.start)} – ${formatHour(b.end)}</div>
       ${resizeHandle}
     `;
+
+    const mitStarBtn = el.querySelector('[data-mit-star-btn]');
+    if (mitStarBtn) {
+      mitStarBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const res = await toggleMITTask(date, b.id);
+        if (!res.success) {
+          alert(res.message || 'You already have 3 MITs for today.');
+        }
+        await loadBlocks();
+        if (typeof window.renderPriorityList === 'function') {
+          await window.renderPriorityList();
+        }
+      });
+    }
 
     const bumpEl = el.querySelector('[data-bump-btn]');
     if (bumpEl) {
@@ -813,7 +836,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   document.addEventListener('mouseup',   onMouseUp);
 
   // ── Block modal ─────────────────────────────────────────────────────────────
-  const modal = buildBlockModal();
+  const modal = buildBlockModal(() => date);
   document.body.appendChild(modal.el);
 
   function openBlockModal(block, isNew) {
@@ -895,7 +918,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   // ── Storage ─────────────────────────────────────────────────────────────────
   async function loadBlocks() {
     blocks = await getBlocks(date);
-    renderBlocks();
+    await renderBlocks();
   }
 
   // ── Scroll to now ────────────────────────────────────────────────────────────
@@ -932,7 +955,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Block edit modal builder
 // ═══════════════════════════════════════════════════════════════════════════════
-function buildBlockModal() {
+function buildBlockModal(getBlockDate) {
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed; inset: 0;
@@ -1017,11 +1040,15 @@ function buildBlockModal() {
             </label>
           </div>
         </div>
-        <!-- Completion Option -->
-        <div style="margin-top:4px; padding-top:10px; border-top:1px solid #E2E8F0;">
+        <!-- Completion & MIT Options -->
+        <div style="margin-top:4px; padding-top:10px; border-top:1px solid #E2E8F0; display:flex; flex-direction:column; gap:8px;">
           <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#1E293B;">
             <input type="checkbox" data-completed-toggle style="accent-color:#16A34A; width:15px; height:15px; cursor:pointer;" />
             Mark as completed ✓
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#4F46E5;">
+            <input type="checkbox" data-mit-toggle style="accent-color:#4F46E5; width:15px; height:15px; cursor:pointer;" />
+            ⭐ Add to Today's Top 3 (MIT)
           </label>
         </div>
       </div>
@@ -1136,6 +1163,18 @@ function buildBlockModal() {
     } : null;
     const isInfrastructure = isRoutine.checked;
     const completed = q('[data-completed-toggle]').checked;
+    const isMITChecked = q('[data-mit-toggle]').checked;
+
+    if (curBlock && curBlock.id && isMITChecked !== !!curBlock._wasMIT) {
+      toggleMITTask(date, curBlock.id).then((res) => {
+        if (!res.success && isMITChecked) {
+          alert(res.message || 'You already have 3 MITs for today.');
+        }
+        if (typeof window.renderPriorityList === 'function') {
+          window.renderPriorityList();
+        }
+      });
+    }
     
     const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure, completed };
     
@@ -1185,6 +1224,12 @@ function buildBlockModal() {
     repeatCustom.style.display = repeatPattern.value === 'custom' ? 'flex' : 'none';
     isRoutine.checked = !!block.isInfrastructure;
     q('[data-completed-toggle]').checked = !!block.completed;
+
+    const activeDate = typeof getBlockDate === 'function' ? getBlockDate() : (typeof date !== 'undefined' ? date : todayKey());
+    const mitData = await getMIT(activeDate);
+    const isMIT = (mitData.taskIds || []).includes(block.id);
+    curBlock._wasMIT = isMIT;
+    q('[data-mit-toggle]').checked = isMIT;
     
     customDays.clear();
     overlay.querySelectorAll('.day-pill').forEach(btn => {

@@ -20,7 +20,8 @@ import {
   addRecurringTemplate, updateFutureRecurringInstances, removeFutureRecurringInstances,
   syncRecurringTemplateForRange, deleteRecurringTemplate, getRecurringTemplates,
   autoGenerateRecurringInstances,
-  getHabits, saveHabits
+  getHabits, saveHabits,
+  getMIT, setMIT, toggleMITTask, getUserDisplayName, formatHour
 } from '../shared/storage.js';
 
 import { generateHabitInstances } from '../shared/habitEngine.js';
@@ -716,8 +717,149 @@ categoryFilter.addEventListener('change', () => {
   renderPriorityList();
 });
 
+function showMITToast(message) {
+  const existing = document.querySelector('.mit-toast-notice');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'mit-toast-notice';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    if (toast.parentNode) toast.remove();
+  }, 3000);
+}
+
+async function renderTop3MITSection() {
+  const container = document.getElementById('top-3-mit-section');
+  if (!container) return;
+
+  const tasks = await getTasks(currentDate);
+  const mitData = await getMIT(currentDate);
+  const blocks = await getBlocks(currentDate);
+  const mitTaskIds = mitData.taskIds || [];
+
+  const mitItems = mitTaskIds
+    .map(id => {
+      const taskMatch = tasks.find(t => t.id === id);
+      if (taskMatch) return { id: taskMatch.id, title: taskMatch.title, done: taskMatch.done, type: 'task' };
+      const blockMatch = blocks.find(b => b.id === id);
+      if (blockMatch) return { id: blockMatch.id, title: blockMatch.title || 'Untitled', done: !!blockMatch.completed, type: 'block', start: blockMatch.start, end: blockMatch.end };
+      return null;
+    })
+    .filter(Boolean);
+
+  const completedCount = mitItems.filter(t => t.done).length;
+  const isAll3Completed = mitItems.length === 3 && completedCount === 3;
+
+  if (isAll3Completed) {
+    container.classList.add('all-completed');
+  } else {
+    container.classList.remove('all-completed');
+  }
+
+  const userName = await getUserDisplayName();
+  const headerText = isAll3Completed
+    ? `✓ Top 3 complete — great day, ${escHtml(userName)}!`
+    : `Today's Top 3`;
+  const subText = isAll3Completed
+    ? `You conquered your most important priorities today!`
+    : `Pick your 3 must-do tasks for today`;
+
+  const posIcons = ['①', '②', '③'];
+
+  let slotsHtml = '';
+  for (let i = 0; i < 3; i++) {
+    const t = mitItems[i];
+    const posBadge = posIcons[i];
+
+    if (t) {
+      let timeLabel = '';
+      if (t.type === 'block' && t.start !== undefined) {
+        timeLabel = `${formatHour(t.start)} – ${formatHour(t.end)}`;
+      } else {
+        const matchingBlock = blocks.find(b => !b.isInfrastructure && (b.title || '').trim().toLowerCase() === (t.title || '').trim().toLowerCase());
+        if (matchingBlock) {
+          timeLabel = `${formatHour(matchingBlock.start)} – ${formatHour(matchingBlock.end)}`;
+        }
+      }
+
+      slotsHtml += `
+        <div class="mit-slot-card filled ${t.done ? 'completed' : ''}" data-task-id="${t.id}" data-type="${t.type}" title="Right-click to remove from Top 3">
+          <span class="mit-pos-badge">${posBadge}</span>
+          <div class="mit-slot-content">
+            <span class="mit-task-title">${escHtml(t.title)}</span>
+            ${timeLabel ? `<span class="mit-task-time">⏰ ${escHtml(timeLabel)}</span>` : ''}
+          </div>
+          <input type="checkbox" class="mit-checkbox" data-task-id="${t.id}" data-type="${t.type}" ${t.done ? 'checked' : ''} title="${t.done ? 'Mark as incomplete' : 'Mark as completed'}" />
+        </div>
+      `;
+    } else {
+      const placeholderText = i === 0
+        ? 'Tap ☆ on any task or time block to mark as #1 priority'
+        : '————————————';
+      slotsHtml += `
+        <div class="mit-slot-card empty">
+          <span class="mit-pos-badge" style="opacity:0.4;">${posBadge}</span>
+          <div class="mit-slot-content">
+            <span class="mit-task-title" style="font-size:12px; font-weight:500; opacity:0.7;">${escHtml(placeholderText)}</span>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  container.innerHTML = `
+    <div class="mit-header-row">
+      <div class="mit-header-title">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+             fill="none" stroke="${isAll3Completed ? 'var(--color-success)' : 'var(--color-accent)'}" stroke-width="2.5"
+             stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+        </svg>
+        <span>${headerText}</span>
+      </div>
+      <span class="mit-header-sub">${subText}</span>
+    </div>
+    <div class="mit-slots-grid">
+      ${slotsHtml}
+    </div>
+  `;
+
+  container.querySelectorAll('.mit-checkbox').forEach(chk => {
+    chk.addEventListener('change', async (e) => {
+      e.stopPropagation();
+      const itemId = chk.dataset.taskId;
+      const itemType = chk.dataset.type;
+      const isDone = chk.checked;
+      if (itemType === 'block') {
+        await updateBlock(currentDate, itemId, { completed: isDone });
+      } else {
+        await updateTask(currentDate, itemId, { done: isDone });
+      }
+      await renderPriorityList();
+    });
+  });
+
+  container.querySelectorAll('.mit-slot-card.filled').forEach(card => {
+    const taskId = card.dataset.taskId;
+    card.addEventListener('contextmenu', async (e) => {
+      e.preventDefault();
+      await toggleMITTask(currentDate, taskId);
+      await renderPriorityList();
+    });
+  });
+}
+
 async function renderPriorityList() {
   const tasks = await getTasks(currentDate);
+  const mitData = await getMIT(currentDate);
+  const mitTaskIds = mitData.taskIds || [];
+  const isMITFull = mitTaskIds.length >= 3;
+
+  await renderTop3MITSection();
+
   // Update progress card
   const { total: totalTasks, completed: completedTasks } = getTaskCompletionStats(tasks);
   updateDailyProgressCard(totalTasks, completedTasks);
@@ -801,9 +943,19 @@ async function renderPriorityList() {
         <div class="category-group-list" style="display: ${isCollapsed ? 'none' : 'block'};">
           ${catTasks.map((t) => {
             const isSubtaskExpanded = expandedSubtaskAdds.includes(t.id);
+            const isTaskMIT = mitTaskIds.includes(t.id) || !!t.isMIT;
+            const starTitle = isTaskMIT ? 'Remove from Top 3' : (isMITFull ? 'Top 3 full' : 'Mark as Top 3 MIT');
+            
             return `
               <div class="priority-item-container" style="border-bottom: 1px solid var(--color-border); padding: 7px 0; display: flex; flex-direction: column;">
                 <div class="priority-item" data-id="${t.id}" draggable="true" style="border-bottom: none; padding: 0; cursor: grab;">
+                  <button class="btn-mit-star ${isTaskMIT ? 'is-mit' : ''} ${!isTaskMIT && isMITFull ? 'is-disabled' : ''}" data-id="${t.id}" title="${starTitle}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                         fill="${isTaskMIT ? 'var(--color-accent)' : 'none'}" stroke="${isTaskMIT ? 'var(--color-accent)' : 'currentColor'}" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                    </svg>
+                  </button>
                   <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
                   <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
                   <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
@@ -902,6 +1054,19 @@ async function renderPriorityList() {
   }
 
   priorityList.innerHTML = html;
+
+  // MIT Star button toggle handlers
+  priorityList.querySelectorAll('.btn-mit-star').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const taskId = btn.dataset.id;
+      const res = await toggleMITTask(currentDate, taskId);
+      if (!res.success) {
+        showMITToast(res.message || 'You already have 3 MITs for today. Complete or unmark one first.');
+      }
+      await renderPriorityList();
+    });
+  });
 
   // Restore focus to the quick add input if we just added a task to a category
   let categoryToFocus = activeFocusClass === 'category-quick-add-input' ? activeFocusData : lastAddedCategory;
