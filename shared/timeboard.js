@@ -79,6 +79,94 @@ function cancelAlarm(id) {
   try { chrome.runtime.sendMessage({ type: 'CANCEL_BLOCK_ALARM', blockId: id }); } catch (_) {}
 }
 
+// ─── Non-blocking bump-fail toast ─────────────────────────────────────────────
+/**
+ * Shows a brief inline toast when Bump can't fit a task.
+ * Offers a "Defer to Tomorrow" button instead of blocking alert().
+ */
+function showBumpFailToast(block, date) {
+  // Remove any existing toast
+  document.querySelectorAll('[data-bump-fail-toast]').forEach(el => el.remove());
+
+  const toast = document.createElement('div');
+  toast.setAttribute('data-bump-fail-toast', '');
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1E293B;
+    color: #F1F5F9;
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 13px;
+    font-family: inherit;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 99999;
+    max-width: 420px;
+    animation: toastSlideUp 0.22s ease;
+  `;
+
+  // Inject keyframe once
+  if (!document.getElementById('bump-toast-style')) {
+    const s = document.createElement('style');
+    s.id = 'bump-toast-style';
+    s.textContent = `
+      @keyframes toastSlideUp {
+        from { opacity:0; transform:translateX(-50%) translateY(12px); }
+        to   { opacity:1; transform:translateX(-50%) translateY(0); }
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  const msg = document.createElement('span');
+  msg.textContent = '⚠️ No room left today with buffer.';
+  toast.appendChild(msg);
+
+  const deferBtn = document.createElement('button');
+  deferBtn.textContent = '🌅 Defer to Tomorrow';
+  deferBtn.style.cssText = `
+    background: #4F46E5; color: #fff; border: none; border-radius: 6px;
+    padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+    white-space: nowrap; flex-shrink: 0;
+  `;
+  deferBtn.addEventListener('click', async () => {
+    toast.remove();
+    const { getTomorrowKey: _t } = await import('./timeboard.js').catch(() => ({}));
+    // Compute tomorrow using local date arithmetic
+    const d = new Date(date + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    const tomorrow = [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, '0'),
+      String(d.getDate()).padStart(2, '0'),
+    ].join('-');
+    await deferBlocksToDate(date, tomorrow, [block.id]);
+    // Trigger board refresh if possible
+    if (typeof window._timeboardRefresh === 'function') window._timeboardRefresh();
+    else location.reload();
+  });
+  toast.appendChild(deferBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = `
+    background: transparent; color: #94A3B8; border: none;
+    font-size: 14px; cursor: pointer; padding: 2px 4px; flex-shrink: 0;
+  `;
+  closeBtn.addEventListener('click', () => toast.remove());
+  toast.appendChild(closeBtn);
+
+  document.body.appendChild(toast);
+
+  // Auto-dismiss after 6 seconds
+  setTimeout(() => toast?.remove(), 6000);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // mountTimeboard — main export
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -190,7 +278,8 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   boardEl.style.cssText = 'height:100%; overflow-y:auto; overflow-x:hidden; position:relative;';
 
   const innerEl = document.createElement('div');
-  innerEl.style.cssText = 'display:flex; position:relative;';
+  // Extra bottom padding so the midnight (12 AM) label is fully visible
+  innerEl.style.cssText = 'display:flex; position:relative; padding-bottom:56px;';
 
   // Labels column (56px wide, labels centered on line boundaries)
   const labelsEl = document.createElement('div');
@@ -220,8 +309,9 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   // Grid (fills remaining width, position:relative for absolute blocks)
   const gridEl = document.createElement('div');
+  // Add 40px extra so the midnight label (positioned at the very end) isn't clipped
   gridEl.style.cssText = `flex:1; position:relative; border-left:1px solid #CBD5E1;
-    height:${TOTAL_HOURS * PX_PER_HOUR}px; overflow:visible;`;
+    height:${TOTAL_HOURS * PX_PER_HOUR + 40}px; overflow:visible;`;
 
   // Slot lines
   const totalSlots = TOTAL_HOURS * 2; // 36 half-hour slots
@@ -245,11 +335,16 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   boardEl.appendChild(innerEl);
   containerEl.appendChild(boardEl);
 
-  // Helper date function
+  // Helper date function — use local date components to avoid UTC offset bugs.
+  // toISOString() returns UTC, which in UTC+ timezones (e.g. IST +05:30) shifts
+  // midnight back to the previous day, making "tomorrow" resolve to today.
   function getTomorrowKey(dateStr) {
     const d = new Date(dateStr + 'T00:00:00');
     d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   // ── Now line updater ────────────────────────────────────────────────────────
@@ -577,17 +672,13 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     if (bumpEl) {
       bumpEl.addEventListener('click', async (e) => {
         e.stopPropagation();
-        const duration = Math.max(0.25, b.end - b.start);
         const startFrom = isToday ? Math.max(BOARD_START, currentDec) : BOARD_START;
-        const freeSlot = await findNextFreeSlot(date, duration, startFrom, [b.id]);
-        if (freeSlot) {
-          b.start = freeSlot.start;
-          b.end = freeSlot.end;
-          b.rescheduled = true;
-          await updateBlock(date, b.id, { start: freeSlot.start, end: freeSlot.end, rescheduled: true });
+        const res = await autoRescheduleBlocks(date, [b.id], startFrom, activeBufferMins / 60);
+        if (res.rescheduledCount > 0) {
           await loadBlocks();
         } else {
-          alert('No open slot remaining today. Try deferring to tomorrow!');
+          // Show a non-blocking inline toast instead of a jarring alert()
+          showBumpFailToast(b, date);
         }
       });
     }
@@ -633,6 +724,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
         block: b,
         el,
         startY,
+        startScroll: boardEl ? boardEl.scrollTop : 0,
         blockStart,
         duration,
         hasMoved: true
@@ -675,25 +767,76 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     dragCreate = { startHour, endHour: startHour + 0.5, ghost: null, hasDragged: false };
   });
 
+  // Auto-scroll helper for drag operations
+  let autoScrollInterval = null;
+  let scrollSpeed = 0;
+
+  function updateAutoScroll(clientY) {
+    if (!boardEl) return;
+    const rect = boardEl.getBoundingClientRect();
+    const threshold = 50; // px from edge
+    const maxSpeed = 15; // px per tick
+
+    if (clientY < rect.top + threshold && clientY > rect.top - 50) {
+      scrollSpeed = -Math.max(2, Math.round(maxSpeed * (1 - Math.max(0, clientY - rect.top) / threshold)));
+    } else if (clientY > rect.bottom - threshold && clientY < rect.bottom + 50) {
+      scrollSpeed = Math.max(2, Math.round(maxSpeed * (1 - Math.max(0, rect.bottom - clientY) / threshold)));
+    } else {
+      scrollSpeed = 0;
+    }
+
+    if (scrollSpeed !== 0) {
+      if (!autoScrollInterval) {
+        autoScrollInterval = setInterval(() => {
+          if (scrollSpeed !== 0 && boardEl) {
+            boardEl.scrollTop += scrollSpeed;
+          }
+        }, 16);
+      }
+    } else {
+      stopAutoScroll();
+    }
+  }
+
+  function stopAutoScroll() {
+    scrollSpeed = 0;
+    if (autoScrollInterval) {
+      clearInterval(autoScrollInterval);
+      autoScrollInterval = null;
+    }
+  }
+
   // ── Drag & Drop tasks onto grid ─────────────────────────────────────────────
-  gridEl.addEventListener('dragover', (e) => {
+  boardEl.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
+    updateAutoScroll(e.clientY);
+  });
+
+  boardEl.addEventListener('dragleave', (e) => {
+    // If mouse left board bounds
+    const rect = boardEl.getBoundingClientRect();
+    if (e.clientY < rect.top || e.clientY > rect.bottom || e.clientX < rect.left || e.clientX > rect.right) {
+      stopAutoScroll();
+    }
   });
 
   gridEl.addEventListener('drop', async (e) => {
     e.preventDefault();
+    stopAutoScroll();
     try {
       const dataStr = e.dataTransfer.getData('text/plain');
       if (!dataStr) return;
       const taskData = JSON.parse(dataStr);
       if (!taskData || !taskData.title) return;
 
-      const startHour = getSlotStartHour(e);
-      
       // Snapping to estimate or defaulting to 1 hour
       const duration = taskData.timeEstimate ? Math.max(0.5, snapHour(taskData.timeEstimate / 60)) : 1.0;
-      const endHour = Math.min(BOARD_END, startHour + duration);
+      
+      let rawStartHour = getSlotStartHour(e);
+      // Ensure block doesn't overflow past midnight (BOARD_END)
+      const startHour = Math.max(BOARD_START, Math.min(BOARD_END - duration, rawStartHour));
+      const endHour = startHour + duration;
 
       // Map task category to timeboard categories
       let blockCat = getSelectedCat();
@@ -719,6 +862,10 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       await addBlock(date, newBlock);
       registerAlarm(newBlock, date);
       await loadBlocks();
+
+      if (typeof window.renderPriorityList === 'function') {
+        await window.renderPriorityList();
+      }
     } catch (err) {
       console.error('[Timeboard Drop] failed:', err);
     }
@@ -726,6 +873,10 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   // ── Global mousemove / mouseup ──────────────────────────────────────────────
   function onMouseMove(e) {
+    if (dragCreate || dragResize || dragMove) {
+      updateAutoScroll(e.clientY);
+    }
+
     if (dragCreate) {
       const rawEnd = snapHour(clampH(pxToHour(getGridY(e))));
       const targetEnd = Math.max(dragCreate.startHour + 0.5, rawEnd);
@@ -764,7 +915,9 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
     if (dragMove) {
       ignoreNextClick = true;
-      const deltaY = e.clientY - dragMove.startY;
+      const currentScroll = boardEl ? boardEl.scrollTop : 0;
+      const scrollDelta = currentScroll - dragMove.startScroll;
+      const deltaY = (e.clientY - dragMove.startY) + scrollDelta;
       const deltaHours = deltaY / PX_PER_HOUR;
       let newStart = snapHour(clampH(dragMove.blockStart + deltaHours));
       newStart = Math.max(BOARD_START, Math.min(BOARD_END - dragMove.duration, newStart));
@@ -785,6 +938,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   }
 
   async function onMouseUp() {
+    stopAutoScroll();
     document.body.style.userSelect = '';
 
     if (dragCreate) {
@@ -868,6 +1022,12 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
           } else {
             await addBlock(date, updated);
           }
+          if (updated._isMITChecked) {
+            const res = await toggleMITTask(date, updated.id);
+            if (!res.success) {
+              alert(res.message || 'You already have 3 MITs for today.');
+            }
+          }
           registerAlarm(updated, date);
         } else {
           if (editMode === 'following') {
@@ -889,6 +1049,9 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
         }
         modal.hide();
         await loadBlocks();
+        if (typeof window.renderPriorityList === 'function') {
+          await window.renderPriorityList();
+        }
       },
       onDelete: async (editMode) => {
         if (editMode === 'following') {
@@ -908,17 +1071,26 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
             }
           }
         }
+        const mitData = await getMIT(date);
+        if ((mitData.taskIds || []).includes(block.id)) {
+          await toggleMITTask(date, block.id);
+        }
         cancelAlarm(block.id);
         modal.hide();
         await loadBlocks();
+        if (typeof window.renderPriorityList === 'function') {
+          await window.renderPriorityList();
+        }
       },
     });
   }
 
   // ── Storage ─────────────────────────────────────────────────────────────────
   async function loadBlocks() {
+    const prevScroll = boardEl ? boardEl.scrollTop : 0;
     blocks = await getBlocks(date);
     await renderBlocks();
+    if (boardEl) boardEl.scrollTop = prevScroll;
   }
 
   // ── Scroll to now ────────────────────────────────────────────────────────────
@@ -932,6 +1104,10 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   loadBlocks().then(() => {
     if (date === todayKey()) setTimeout(scrollToNow, 60);
   });
+
+  // Expose loadBlocks globally so the bump-fail toast can trigger a re-render
+  // without reloading the full page.
+  window._timeboardRefresh = () => loadBlocks();
 
   // ── Public API ────────────────────────────────────────────────────────────────
   return {
@@ -948,6 +1124,8 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       document.removeEventListener('mouseup',   onMouseUp);
       if (modal.el.parentNode) modal.el.remove();
       containerEl.innerHTML = '';
+      // Clean up global reference
+      if (window._timeboardRefresh) delete window._timeboardRefresh;
     },
   };
 }
@@ -1147,7 +1325,7 @@ function buildBlockModal(getBlockDate) {
   q('[data-btn-cancel]').addEventListener('click', hide);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) hide(); });
 
-  q('[data-btn-save]').addEventListener('click', () => {
+  q('[data-btn-save]').addEventListener('click', async () => {
     const title = titleInput.value.trim();
     if (!title) { titleInput.focus(); return; }
     const startStr = q('[data-start]').value;
@@ -1166,17 +1344,13 @@ function buildBlockModal(getBlockDate) {
     const isMITChecked = q('[data-mit-toggle]').checked;
 
     if (curBlock && curBlock.id && isMITChecked !== !!curBlock._wasMIT) {
-      toggleMITTask(date, curBlock.id).then((res) => {
-        if (!res.success && isMITChecked) {
-          alert(res.message || 'You already have 3 MITs for today.');
-        }
-        if (typeof window.renderPriorityList === 'function') {
-          window.renderPriorityList();
-        }
-      });
+      const res = await toggleMITTask(date, curBlock.id);
+      if (!res.success && isMITChecked) {
+        alert(res.message || 'You already have 3 MITs for today.');
+      }
     }
     
-    const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure, completed };
+    const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure, completed, _isMITChecked: isMITChecked };
     
     if (curBlock.isRecurring && curBlock.id && window.confirm("This is a recurring block.\n\nPress OK to apply changes to ALL FUTURE blocks in this series.\nPress Cancel to apply changes ONLY to this block.")) {
       onSaveCb?.(updated, 'following');

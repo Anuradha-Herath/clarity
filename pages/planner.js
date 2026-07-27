@@ -844,6 +844,24 @@ async function renderTop3MITSection() {
 
   container.querySelectorAll('.mit-slot-card.filled').forEach(card => {
     const taskId = card.dataset.taskId;
+    const taskType = card.dataset.type;
+    card.setAttribute('draggable', 'true');
+
+    card.addEventListener('dragstart', (e) => {
+      e.stopPropagation();
+      const t = mitItems.find(item => item && item.id === taskId);
+      if (t) {
+        e.dataTransfer.setData('text/plain', JSON.stringify({
+          type: taskType === 'block' ? 'block' : 'main-task',
+          id: t.id,
+          title: t.title,
+          category: t.category || '',
+          timeEstimate: t.timeEstimate || null
+        }));
+        e.dataTransfer.effectAllowed = 'copyMove';
+      }
+    });
+
     card.addEventListener('contextmenu', async (e) => {
       e.preventDefault();
       await toggleMITTask(currentDate, taskId);
@@ -2277,11 +2295,47 @@ async function saveNotes() {
 //     WEEK TAB
 // ══════════════════════════════════════════════════════════
 
+let currentWeekViewMode = localStorage.getItem('clarity_week_view_mode') || 'timeline'; // 'timeline' or 'list'
+
 const weekGrid     = document.getElementById('week-grid');
 const weekNavTitle = document.getElementById('week-nav-title');
 const btnPrevWeek  = document.getElementById('btn-prev-week');
 const btnNextWeek  = document.getElementById('btn-next-week');
 const btnGoThisWeek = document.getElementById('btn-go-this-week');
+const btnWeekViewTimeline = document.getElementById('btn-week-view-timeline');
+const btnWeekViewList     = document.getElementById('btn-week-view-list');
+
+if (btnWeekViewTimeline && btnWeekViewList) {
+  btnWeekViewTimeline.addEventListener('click', () => {
+    currentWeekViewMode = 'timeline';
+    localStorage.setItem('clarity_week_view_mode', 'timeline');
+    updateWeekViewToggleUI();
+    renderWeekTab();
+  });
+
+  btnWeekViewList.addEventListener('click', () => {
+    currentWeekViewMode = 'list';
+    localStorage.setItem('clarity_week_view_mode', 'list');
+    updateWeekViewToggleUI();
+    renderWeekTab();
+  });
+}
+
+function updateWeekViewToggleUI() {
+  if (!btnWeekViewTimeline || !btnWeekViewList) return;
+  if (currentWeekViewMode === 'timeline') {
+    btnWeekViewTimeline.style.background = 'var(--color-accent)';
+    btnWeekViewTimeline.style.color = 'white';
+    btnWeekViewList.style.background = 'transparent';
+    btnWeekViewList.style.color = 'var(--color-text-muted)';
+  } else {
+    btnWeekViewList.style.background = 'var(--color-accent)';
+    btnWeekViewList.style.color = 'white';
+    btnWeekViewTimeline.style.background = 'transparent';
+    btnWeekViewTimeline.style.color = 'var(--color-text-muted)';
+  }
+}
+updateWeekViewToggleUI();
 
 btnPrevWeek.addEventListener('click', () => {
   const d = new Date(currentWeekStart + 'T12:00:00');
@@ -2302,7 +2356,15 @@ btnGoThisWeek.addEventListener('click', () => {
   renderWeekTab();
 });
 
-async function renderWeekTab() {
+async function renderWeekTab(preserveScroll = false) {
+  let savedScroll = null;
+  if (preserveScroll) {
+    const existingBody = weekGrid.querySelector('.week-timeline-body');
+    if (existingBody) {
+      savedScroll = existingBody.scrollTop;
+    }
+  }
+
   const dates   = getWeekDates(currentWeekStart);
   const lastDay = dates[6];
 
@@ -2315,9 +2377,10 @@ async function renderWeekTab() {
   const auth = await getAuth();
   const userId = auth?.localId || '';
 
-  // Load tasks and fixed events for all 7 days in parallel
-  const [tasksByDay, fixedEventsByDay] = await Promise.all([
+  // Load tasks, blocks (Day view scheduled time blocks), and fixed events for all 7 days in parallel
+  const [tasksByDay, blocksByDay, fixedEventsByDay] = await Promise.all([
     Promise.all(dates.map((d) => getTasks(d))),
+    Promise.all(dates.map((d) => getBlocks(d))),
     Promise.all(dates.map((d) => getFixedEventsForDate(userId, d)))
   ]);
 
@@ -2441,6 +2504,307 @@ async function renderWeekTab() {
     }
   }
 
+  if (currentWeekViewMode === 'timeline') {
+    weekGrid.style.display = 'block';
+    renderWeekTimelineView(dates, tasksByDay, blocksByDay, fixedEventsByDay, savedScroll);
+    return;
+  }
+
+  weekGrid.style.display = 'grid';
+  renderWeekListView(dates, tasksByDay, fixedEventsByDay);
+}
+
+function renderWeekTimelineView(dates, tasksByDay, blocksByDay, fixedEventsByDay, preserveScroll = null) {
+  const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  const container = document.createElement('div');
+  container.className = 'week-timeline-container';
+
+  // 1. Header Row
+  const headerRow = document.createElement('div');
+  headerRow.className = 'week-timeline-header-row';
+  
+  const tzCell = document.createElement('div');
+  tzCell.className = 'week-timeline-tz';
+  tzCell.textContent = 'GMT';
+  headerRow.appendChild(tzCell);
+
+  dates.forEach((date, i) => {
+    const isToday = date === TODAY;
+    const dateObj = new Date(date + 'T12:00:00');
+    const dateNum = dateObj.getDate();
+    const colHdr = document.createElement('div');
+    colHdr.className = `week-timeline-header-col${isToday ? ' is-today' : ''}`;
+    colHdr.dataset.date = date;
+    
+    let holidayEmoji = '';
+    if (showSlHolidays) {
+      const holiday = getSriLankanHoliday(date);
+      if (holiday) holidayEmoji = ` ${holiday.emoji}`;
+    }
+
+    colHdr.innerHTML = `
+      <div style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase;">${DAY_LABELS[i]}</div>
+      <div style="font-size: 14px; font-weight: 700; color: ${isToday ? 'var(--color-accent)' : 'var(--color-text)'}; border-radius: 50%; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; ${isToday ? 'background: var(--color-accent); color: white;' : ''}">${dateNum}</div>
+      ${holidayEmoji ? `<span style="font-size: 10px;">${holidayEmoji}</span>` : ''}
+    `;
+    colHdr.addEventListener('click', () => {
+      currentDate = date;
+      goToDay(date);
+    });
+    headerRow.appendChild(colHdr);
+  });
+  container.appendChild(headerRow);
+
+  // 2. All-day / Unscheduled Tasks Row
+  const alldayRow = document.createElement('div');
+  alldayRow.className = 'week-timeline-allday-row';
+
+  const alldayLabel = document.createElement('div');
+  alldayLabel.className = 'week-timeline-allday-label';
+  alldayLabel.textContent = 'All Day / Tasks';
+  alldayRow.appendChild(alldayLabel);
+
+  dates.forEach((date, i) => {
+    const adCol = document.createElement('div');
+    adCol.className = 'week-timeline-allday-col';
+    
+    // Unscheduled tasks or all day fixed events
+    const dayTasks = tasksByDay[i] || [];
+    const dayFixed = fixedEventsByDay[i] || [];
+
+    const untimedTasks = dayTasks.filter(t => !t.time);
+    const untimedFixed = dayFixed.filter(e => !e.time);
+
+    untimedFixed.forEach(evt => {
+      const chip = document.createElement('div');
+      chip.style.cssText = 'font-size: 10px; background: rgba(59,130,246,0.12); border-left: 2px solid #3b82f6; padding: 2px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+      chip.textContent = `📌 ${evt.title}`;
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openFixedEventModal(evt, async () => refreshActiveTab(), async () => refreshActiveTab());
+      });
+      adCol.appendChild(chip);
+    });
+
+    untimedTasks.forEach(task => {
+      const chip = document.createElement('div');
+      chip.style.cssText = `font-size: 10px; background: var(--color-accent-soft); border-left: 2px solid var(--color-accent); padding: 2px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ${task.done ? 'text-decoration: line-through; opacity: 0.6;' : ''}`;
+      chip.textContent = `${task.done ? '✓ ' : ''}${task.title}`;
+      chip.title = task.title;
+      chip.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await updateTask(date, task.id, { done: !task.done });
+        renderWeekTab(true);
+      });
+      adCol.appendChild(chip);
+    });
+
+    alldayRow.appendChild(adCol);
+  });
+  container.appendChild(alldayRow);
+
+  // 3. Scrollable Timeline Body
+  const body = document.createElement('div');
+  body.className = 'week-timeline-body';
+
+  // Time Column (00:00 - 23:00)
+  const timeCol = document.createElement('div');
+  timeCol.className = 'week-timeline-time-col';
+  for (let h = 0; h < 24; h++) {
+    const lbl = document.createElement('div');
+    lbl.className = 'week-timeline-hour-label';
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    lbl.textContent = `${h12} ${ampm}`;
+    timeCol.appendChild(lbl);
+  }
+  body.appendChild(timeCol);
+
+  // 7 Day Columns
+  dates.forEach((date, i) => {
+    const dayCol = document.createElement('div');
+    dayCol.className = 'week-timeline-day-col';
+    dayCol.dataset.date = date;
+
+    // 24 Hour slot backgrounds
+    for (let h = 0; h < 24; h++) {
+      const slot = document.createElement('div');
+      slot.className = 'week-timeline-hour-slot';
+      slot.addEventListener('dblclick', () => {
+        const timeStr = `${String(h).padStart(2, '0')}:00`;
+        quickAddTaskWithTime(date, timeStr);
+      });
+      dayCol.appendChild(slot);
+    }
+
+    // Now line if today
+    if (date === TODAY) {
+      const now = new Date();
+      const currentMin = now.getHours() * 60 + now.getMinutes();
+      const topPx = (currentMin / 60) * 50; // 50px per hour
+      const nowLine = document.createElement('div');
+      nowLine.className = 'week-timeline-now-line';
+      nowLine.style.top = `${topPx}px`;
+      nowLine.style.left = '0';
+      nowLine.style.right = '0';
+      nowLine.innerHTML = `<div class="week-timeline-now-circle"></div>`;
+      dayCol.appendChild(nowLine);
+    }
+
+    // Collect all timed events, timeboard blocks (Day View schedule) & tasks for this day
+    const dayTasks = (tasksByDay[i] || []).filter(t => !!t.time);
+    const dayBlocks = blocksByDay[i] || [];
+    const dayFixed = (fixedEventsByDay[i] || []).filter(e => !!e.time);
+
+    const timedItems = [];
+
+    // Day View Timeboard Blocks
+    dayBlocks.forEach(b => {
+      const startMin = (b.start || 0) * 60;
+      const durationMin = ((b.end || 0) - (b.start || 0)) * 60;
+      if (durationMin > 0) {
+        const startH = Math.floor(b.start || 0);
+        const startM = Math.round(((b.start || 0) - startH) * 60);
+        const timeStr = `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}`;
+        timedItems.push({
+          type: 'block',
+          item: b,
+          startMin,
+          durationMin,
+          endMin: startMin + durationMin,
+          title: b.title || 'Scheduled Block',
+          done: b.done || false,
+          time: timeStr,
+          cat: b.cat
+        });
+      }
+    });
+
+    dayTasks.forEach(t => {
+      const [h, m] = t.time.split(':').map(Number);
+      const startMin = (h || 0) * 60 + (m || 0);
+      const durationMin = t.duration || 60;
+      timedItems.push({
+        type: 'task',
+        item: t,
+        startMin,
+        durationMin,
+        endMin: startMin + durationMin,
+        title: t.title,
+        done: t.done,
+        time: t.time
+      });
+    });
+
+    dayFixed.forEach(e => {
+      const [h, m] = e.time.split(':').map(Number);
+      const startMin = (h || 0) * 60 + (m || 0);
+      let durationMin = 60;
+      if (e.endTime) {
+        const [eh, em] = e.endTime.split(':').map(Number);
+        const endCalculated = (eh || 0) * 60 + (em || 0);
+        if (endCalculated > startMin) durationMin = endCalculated - startMin;
+      }
+      timedItems.push({
+        type: 'fixed',
+        item: e,
+        startMin,
+        durationMin,
+        endMin: startMin + durationMin,
+        title: e.title,
+        time: e.time,
+        eventType: e.type || 'appointment'
+      });
+    });
+
+    // Render timed items visually
+    timedItems.forEach(itm => {
+      const topPx = (itm.startMin / 60) * 50;
+      const heightPx = Math.max((itm.durationMin / 60) * 50, 32);
+
+      const el = document.createElement('div');
+      let classType = 'task-event';
+      if (itm.type === 'fixed') {
+        classType = `fixed-${itm.eventType}`;
+      } else if (itm.type === 'block') {
+        classType = 'task-event';
+      }
+
+      el.className = `week-timeline-event ${classType}${itm.done ? ' completed' : ''}`;
+      el.style.top = `${topPx}px`;
+      el.style.height = `${heightPx}px`;
+      el.style.left = '4px';
+      el.style.right = '4px';
+
+      const timeFmt = formatTimeStr(itm.time);
+      el.innerHTML = `
+        <div style="display: flex; flex-direction: column; height: 100%; justify-content: center; overflow: hidden;">
+          <div style="font-weight: 600; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2;">${itm.done ? '✓ ' : ''}${escHtml(itm.title)}</div>
+          <div style="font-size: 10px; opacity: 0.75; white-space: nowrap; line-height: 1.1; margin-top: 1px;">${timeFmt}</div>
+        </div>
+      `;
+
+      if (itm.type === 'task') {
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          openTaskModal(itm.item, date);
+        });
+      } else if (itm.type === 'block') {
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          // Find matching task for this block if available, or open task modal with prefilled title & time
+          openTaskModal({
+            id: itm.item.id,
+            title: itm.item.title,
+            time: itm.time,
+            category: itm.item.cat || 'Personal',
+            done: itm.item.done || false
+          }, date);
+        });
+      } else {
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          openFixedEventModal(itm.item, async () => refreshActiveTab(), async () => refreshActiveTab());
+        });
+      }
+
+      dayCol.appendChild(el);
+    });
+
+    body.appendChild(dayCol);
+  });
+
+  container.appendChild(body);
+  weekGrid.appendChild(container);
+
+  if (preserveScroll !== null) {
+    body.scrollTop = preserveScroll;
+  } else {
+    // Auto-scroll timeline body to current hour or 8 AM
+    setTimeout(() => {
+      const now = new Date();
+      const isCurrentWeek = dates.includes(TODAY);
+      const targetHour = Math.max(0, (isCurrentWeek ? now.getHours() : 8) - 1);
+      body.scrollTop = targetHour * 50;
+    }, 50);
+  }
+}
+
+async function quickAddTaskWithTime(date, timeStr) {
+  const title = prompt(`Add task for ${date} at ${formatTimeStr(timeStr)}:`);
+  if (!title || !title.trim()) return;
+  await addTask(date, {
+    title: title.trim(),
+    time: timeStr,
+    priority: 2,
+    done: false
+  });
+  renderWeekTab(true);
+}
+
+function renderWeekListView(dates, tasksByDay, fixedEventsByDay) {
+  weekGrid.innerHTML = '';
   const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   dates.forEach((date, i) => {
@@ -2494,7 +2858,6 @@ async function renderWeekTab() {
       const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
       return !isMulti;
     });
-    
 
     dayFixedEvents.forEach(event => {
       const chip = document.createElement('div');
@@ -2525,43 +2888,6 @@ async function renderWeekTab() {
     col.querySelector('.week-col-header').addEventListener('click', () => {
       currentDate = date;
       goToDay(date);
-    });
-
-    // Drag-and-drop column listeners
-    col.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      col.classList.add('drag-over');
-    });
-
-    col.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      col.classList.add('drag-over');
-    });
-
-    col.addEventListener('dragleave', () => {
-      col.classList.remove('drag-over');
-    });
-
-    col.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      col.classList.remove('drag-over');
-      try {
-        const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-        if (data && data.id && data.sourceDate) {
-          const targetDate = date;
-          if (data.sourceDate === targetDate) return;
-
-          const sourceTasks = await getTasks(data.sourceDate);
-          const taskToMove = sourceTasks.find(t => t.id === data.id);
-          if (taskToMove) {
-            await deleteTask(data.sourceDate, data.id);
-            await addTask(targetDate, taskToMove);
-            renderWeekTab();
-          }
-        }
-      } catch (err) {
-        console.error('Drag and drop error:', err);
-      }
     });
 
     weekGrid.appendChild(col);
@@ -3676,6 +4002,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   const hasPlannerChanges = keys.some(key => 
     key.startsWith('blocks_') || 
     key.startsWith('tasks_') || 
+    key.startsWith('mit_') ||
     key.startsWith('notes_') || 
     key === 'notes' || 
     key === 'collapsed_categories' || 

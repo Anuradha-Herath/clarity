@@ -274,6 +274,16 @@
             <polyline points="9 18 15 12 9 6"/>
           </svg>
         </button>
+        <div class="week-view-toggle" style="display: flex; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px; padding: 2px; gap: 2px; margin-left: 8px;">
+          <button class="btn btn-xs active-view" id="btn-week-view-timeline" style="font-size: 11px; padding: 3px 8px; border-radius: 4px; display: flex; align-items: center; gap: 4px; border: none; background: var(--color-accent); color: white; cursor: pointer; font-weight: 500;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="12" x2="12" y2="18"/></svg>
+            Timeline
+          </button>
+          <button class="btn btn-xs" id="btn-week-view-list" style="font-size: 11px; padding: 3px 8px; border-radius: 4px; display: flex; align-items: center; gap: 4px; border: none; background: transparent; color: var(--color-text-muted); cursor: pointer; font-weight: 500;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            List
+          </button>
+        </div>
         <button class="btn btn-ghost btn-sm" id="btn-add-fixed-event-week" title="Add Fixed Event" style="display: flex; align-items: center; gap: 4px; padding: 6px; margin-left: 8px;">
           <span>📌</span>
         </button>
