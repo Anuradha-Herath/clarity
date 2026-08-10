@@ -107,6 +107,82 @@ export function showAlert(message, title = 'Notification') {
   });
 }
 
+export function showChoiceDialog({
+  title = 'Recurring Item',
+  message = 'How would you like to apply your changes?',
+  choices = [
+    { value: 'only-this', label: 'This instance only', description: 'Changes affect only this item.' },
+    { value: 'following', label: 'This and future instances', description: 'Changes affect this and all future recurring instances.' },
+    { value: 'all', label: 'All instances', description: 'Changes template and updates all instances.' }
+  ],
+  defaultChoice = 'following',
+  confirmText = 'Apply',
+  cancelText = 'Cancel'
+} = {}) {
+  return new Promise((resolve) => {
+    injectStyles();
+
+    let overlay = document.getElementById('custom-choice-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'custom-choice-overlay';
+      overlay.className = 'custom-dialog-overlay';
+      overlay.innerHTML = `
+        <div class="custom-dialog-modal" style="max-width:380px;">
+          <div class="custom-dialog-title"></div>
+          <div class="custom-dialog-message"></div>
+          <div class="custom-dialog-choices" style="display:flex; flex-direction:column; gap:10px; margin-bottom:20px;"></div>
+          <div class="custom-dialog-buttons">
+            <button class="custom-dialog-btn cancel-btn">Cancel</button>
+            <button class="custom-dialog-btn ok-btn">Confirm</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+    }
+
+    const titleEl = overlay.querySelector('.custom-dialog-title');
+    const msgEl = overlay.querySelector('.custom-dialog-message');
+    const choicesEl = overlay.querySelector('.custom-dialog-choices');
+    const btnCancel = overlay.querySelector('.cancel-btn');
+    const btnOk = overlay.querySelector('.ok-btn');
+
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+    btnCancel.textContent = cancelText;
+    btnOk.textContent = confirmText;
+
+    choicesEl.innerHTML = choices.map((c, i) => `
+      <label style="display:flex; align-items:flex-start; gap:10px; padding:8px 10px; border:1px solid var(--color-border, #e2e8f0); border-radius:8px; cursor:pointer; transition:background 0.15s ease;" onmouseover="this.style.background='var(--color-bg-hover, #f8fafc)'" onmouseout="this.style.background='transparent'">
+        <input type="radio" name="custom-choice-radio" value="${c.value}" ${c.value === defaultChoice || (i === 0 && !defaultChoice) ? 'checked' : ''} style="margin-top:3px; accent-color:var(--color-accent, #6366f1);" />
+        <div>
+          <strong style="display:block; font-size:13px; color:var(--color-text, #1e293b);">${c.label}</strong>
+          ${c.description ? `<span style="font-size:11px; color:var(--color-text-muted, #64748b);">${c.description}</span>` : ''}
+        </div>
+      </label>
+    `).join('');
+
+    overlay.style.display = 'flex';
+
+    const cleanUp = (value) => {
+      overlay.style.display = 'none';
+      btnOk.onclick = null;
+      btnCancel.onclick = null;
+      overlay.onclick = null;
+      resolve(value);
+    };
+
+    btnOk.onclick = () => {
+      const selected = overlay.querySelector('input[name="custom-choice-radio"]:checked')?.value || null;
+      cleanUp(selected);
+    };
+    btnCancel.onclick = () => cleanUp(null);
+    overlay.onclick = (e) => {
+      if (e.target === overlay) cleanUp(null);
+    };
+  });
+}
+
 function injectStyles() {
   if (document.getElementById('custom-dialog-styles')) return;
   const style = document.createElement('style');

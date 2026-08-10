@@ -17,11 +17,13 @@ import {
   generateId, snapHour, formatHour, timeToDec, decimalToTime, todayKey,
   getCustomCategories,
   getRecurringTemplates, addRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate,
-  syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances,
+  syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances, handleRecurringItemUpdate,
   findNextFreeSlot, autoRescheduleBlocks, deferBlocksToDate,
   getAutoBufferMinutes, setAutoBufferMinutes,
   getMIT, setMIT, toggleMITTask
 } from './storage.js';
+
+import { showConfirm, showAlert, showChoiceDialog } from './dialog.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const BOARD_START = 6;    // 6 AM
@@ -659,7 +661,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
         e.preventDefault();
         const res = await toggleMITTask(date, b.id);
         if (!res.success) {
-          alert(res.message || 'You already have 3 MITs for today.');
+          await showAlert(res.message || 'You already have 3 MITs for today.', 'MIT Limit');
         }
         await loadBlocks();
         if (typeof window.renderPriorityList === 'function') {
@@ -996,57 +998,15 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   function openBlockModal(block, isNew) {
     modal.show(block, isNew, {
       onSave: async (updated, editMode) => {
-        if (isNew) {
-          if (updated.isRecurring) {
-            updated.recurrenceId = generateId();
-            const template = {
-              id: generateId(),
-              recurrenceId: updated.recurrenceId,
-              itemType: 'block',
-              startDate: date,
-              title: updated.title,
-              cat: updated.cat,
-              start: updated.start,
-              end: updated.end,
-              recurrencePattern: updated.recurrencePattern,
-              isInfrastructure: updated.isInfrastructure
-            };
-            await addRecurringTemplate(template);
-            
-            const endObj = new Date(date);
-            endObj.setDate(endObj.getDate() + 60);
-            const y = endObj.getFullYear();
-            const m = String(endObj.getMonth() + 1).padStart(2, '0');
-            const d = String(endObj.getDate()).padStart(2, '0');
-            await syncRecurringTemplateForRange(template, date, `${y}-${m}-${d}`);
-          } else {
-            await addBlock(date, updated);
+        await handleRecurringItemUpdate('block', isNew ? null : block, updated, date, editMode);
+        if (updated._isMITChecked) {
+          const res = await toggleMITTask(date, updated.id);
+          if (!res.success) {
+            await showAlert(res.message || 'You already have 3 MITs for today.', 'MIT Limit');
           }
-          if (updated._isMITChecked) {
-            const res = await toggleMITTask(date, updated.id);
-            if (!res.success) {
-              alert(res.message || 'You already have 3 MITs for today.');
-            }
-          }
-          registerAlarm(updated, date);
-        } else {
-          if (editMode === 'following') {
-            await updateFutureRecurringInstances(updated.recurrenceId, date, 'block', updated);
-            const templates = await getRecurringTemplates();
-            const t = templates.find(x => x.recurrenceId === updated.recurrenceId);
-            if (t) {
-              Object.assign(t, {
-                title: updated.title, cat: updated.cat, start: updated.start, end: updated.end,
-                recurrencePattern: updated.recurrencePattern, isInfrastructure: updated.isInfrastructure
-              });
-              await updateRecurringTemplate(t.id, t);
-            }
-          } else {
-            await updateBlock(date, updated.id, updated);
-          }
-          cancelAlarm(updated.id);
-          registerAlarm(updated, date);
         }
+        cancelAlarm(updated.id);
+        registerAlarm(updated, date);
         modal.hide();
         await loadBlocks();
         if (typeof window.renderPriorityList === 'function') {
@@ -1346,30 +1306,51 @@ function buildBlockModal(getBlockDate) {
     if (curBlock && curBlock.id && isMITChecked !== !!curBlock._wasMIT) {
       const res = await toggleMITTask(date, curBlock.id);
       if (!res.success && isMITChecked) {
-        alert(res.message || 'You already have 3 MITs for today.');
+        await showAlert(res.message || 'You already have 3 MITs for today.', 'MIT Limit');
       }
     }
     
     const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure, completed, _isMITChecked: isMITChecked };
     
-    if (curBlock.isRecurring && curBlock.id && window.confirm("This is a recurring block.\n\nPress OK to apply changes to ALL FUTURE blocks in this series.\nPress Cancel to apply changes ONLY to this block.")) {
-      onSaveCb?.(updated, 'following');
-    } else if (curBlock.isRecurring && curBlock.id) {
-      onSaveCb?.(updated, 'only-this');
+    const isOrWasRecurring = !!curBlock?.isRecurring || isRecurring;
+    if (isOrWasRecurring && curBlock?.id) {
+      const choice = await showChoiceDialog({
+        title: 'Edit Recurring Block',
+        message: 'How would you like to apply your changes to this block?',
+        choices: [
+          { value: 'only-this', label: 'This block only', description: 'Changes affect only today\'s block.' },
+          { value: 'following', label: 'This and future blocks', description: 'Changes affect this and all future recurring blocks.' },
+          { value: 'all', label: 'All blocks (Template)', description: 'Changes template and updates all blocks.' }
+        ],
+        defaultChoice: 'following',
+        confirmText: 'Save Block'
+      });
+      if (!choice) return;
+      onSaveCb?.(updated, choice);
     } else {
-      onSaveCb?.(updated, 'only-this');
+      onSaveCb?.(updated, 'following');
     }
   });
 
-  q('[data-btn-delete]').addEventListener('click', () => { 
-    if (curBlock.isRecurring) {
-      if (window.confirm("Delete ALL FUTURE blocks in this series? (Cancel will delete only this one)")) {
-        onDeleteCb?.('following');
-      } else {
-        onDeleteCb?.('only-this');
-      }
+  q('[data-btn-delete]').addEventListener('click', async () => { 
+    if (curBlock?.isRecurring && curBlock?.id) {
+      const choice = await showChoiceDialog({
+        title: 'Delete Recurring Block',
+        message: 'This is a recurring block. Which instances would you like to delete?',
+        choices: [
+          { value: 'only-this', label: 'Delete this block only', description: 'Deletes only today\'s block.' },
+          { value: 'following', label: 'Delete this and all future blocks', description: 'Deletes this block and stops future recurrences.' }
+        ],
+        defaultChoice: 'following',
+        confirmText: 'Delete Block'
+      });
+      if (!choice) return;
+      onDeleteCb?.(choice);
     } else {
-      onDeleteCb?.('only-this'); 
+      const confirmed = await showConfirm('Are you sure you want to delete this block?', 'Delete Block');
+      if (confirmed) {
+        onDeleteCb?.('only-this'); 
+      }
     }
   });
 

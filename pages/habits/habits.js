@@ -9,6 +9,8 @@ import {
   getCustomCategories
 } from '../../shared/storage.js';
 
+import { showConfirm, showAlert } from '../../shared/dialog.js';
+
 // SVG Definitions for preset icons
 const HABIT_ICONS = {
   Book: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>`,
@@ -260,7 +262,8 @@ function setupEventListeners() {
 
   btnDeleteHabit.addEventListener('click', async () => {
     const id = fieldId.value;
-    if (confirm('Are you sure you want to delete this habit? All future scheduled items will be removed.')) {
+    const confirmed = await showConfirm('Are you sure you want to delete this habit? All future scheduled items will be removed.', 'Delete Habit');
+    if (confirmed) {
       const filtered = allHabits.filter(h => h.id !== id);
       await saveHabits(filtered);
       await removeFutureHabitInstances(id, TODAY);
@@ -445,11 +448,11 @@ function addTimeSlotRow(time = '08:00', label = '') {
     <input type="text" class="timeslot-input-label" placeholder="Slot label (e.g. Morning dose)" value="${label}" maxLength="50" />
     <button type="button" class="btn-remove-slot">&times;</button>
   `;
-  row.querySelector('.btn-remove-slot').addEventListener('click', () => {
+  row.querySelector('.btn-remove-slot').addEventListener('click', async () => {
     if (timeSlotsContainer.querySelectorAll('.timeslot-row').length > 1) {
       row.remove();
     } else {
-      alert('A habit must have at least one time slot!');
+      await showAlert('A habit must have at least one time slot!', 'Time Slot Required');
     }
   });
   timeSlotsContainer.appendChild(row);
@@ -472,7 +475,7 @@ async function saveHabitForm() {
       days.push(btn.dataset.day);
     });
     if (days.length === 0) {
-      alert('Please select at least one day for the specific days pattern.');
+      await showAlert('Please select at least one day for the specific days pattern.', 'Selection Required');
       return;
     }
   } else if (recType === 'xPerWeek') {

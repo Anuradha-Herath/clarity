@@ -1997,6 +1997,8 @@ export async function syncRecurringTemplateForRange(template, startDate, endDate
             priority: template.priority || 3,
             timeEstimate: template.timeEstimate || 15,
             category: template.category || 'Personal',
+            subtasks: template.subtasks ? JSON.parse(JSON.stringify(template.subtasks)) : [],
+            linkedGoalId: template.linkedGoalId || null,
             isRecurring: true,
             recurrencePattern: template.recurrencePattern,
             recurrenceId: template.recurrenceId
@@ -2378,6 +2380,147 @@ export async function getUserDisplayName() {
   } catch (_) {}
   return "Anuradha";
 }
+
+/**
+ * Handle saving/updating a recurring or non-recurring item (task or block).
+ * Manages template creation, deletion, pattern sync, and future instance updates based on editMode.
+ */
+export async function handleRecurringItemUpdate(itemType, originalItem, patch, targetDate, editMode = 'following') {
+  const wasRecurring = !!originalItem?.isRecurring && !!originalItem?.recurrenceId;
+  const isRecurring = !!patch.isRecurring;
+  const recurrenceId = patch.recurrenceId || originalItem?.recurrenceId || generateId();
+
+  // Case 1: Toggled OFF recurring
+  if (wasRecurring && !isRecurring) {
+    patch.recurrenceId = null;
+    patch.recurrencePattern = null;
+    patch.isRecurring = false;
+
+    if (editMode === 'following' || editMode === 'all') {
+      await removeFutureRecurringInstances(originalItem.recurrenceId, targetDate, itemType);
+      const templates = await getRecurringTemplates();
+      const t = templates.find(x => x.recurrenceId === originalItem.recurrenceId);
+      if (t) await deleteRecurringTemplate(t.id);
+    } else {
+      // only-this instance
+      const templates = await getRecurringTemplates();
+      const t = templates.find(x => x.recurrenceId === originalItem.recurrenceId);
+      if (t) {
+        if (!t.exceptions) t.exceptions = [];
+        if (!t.exceptions.includes(targetDate)) t.exceptions.push(targetDate);
+        await updateRecurringTemplate(t.id, { exceptions: t.exceptions });
+      }
+    }
+
+    if (itemType === 'task') {
+      await updateTask(targetDate, originalItem.id, patch);
+    } else {
+      await updateBlock(targetDate, originalItem.id, patch);
+    }
+    return;
+  }
+
+  // Case 2: Toggled ON recurring (or new recurring item)
+  if (!wasRecurring && isRecurring) {
+    patch.recurrenceId = recurrenceId;
+    patch.isRecurring = true;
+
+    const template = {
+      id: generateId(),
+      recurrenceId,
+      itemType,
+      startDate: targetDate,
+      title: patch.title,
+      recurrencePattern: patch.recurrencePattern,
+      ...(itemType === 'task' ? {
+        priority: patch.priority || 3,
+        timeEstimate: patch.timeEstimate || 15,
+        category: patch.category || 'Personal',
+        subtasks: patch.subtasks || [],
+        linkedGoalId: patch.linkedGoalId || null
+      } : {
+        cat: patch.cat || patch.category || 'Personal',
+        start: patch.start,
+        end: patch.end,
+        isInfrastructure: !!patch.isInfrastructure
+      })
+    };
+    await addRecurringTemplate(template);
+
+    if (originalItem?.id) {
+      if (itemType === 'task') {
+        await updateTask(targetDate, originalItem.id, patch);
+      } else {
+        await updateBlock(targetDate, originalItem.id, patch);
+      }
+    } else {
+      if (itemType === 'task') {
+        await addTask(targetDate, patch);
+      } else {
+        await addBlock(targetDate, patch);
+      }
+    }
+
+    // Sync future dates (60 days)
+    const endObj = new Date(targetDate);
+    endObj.setDate(endObj.getDate() + 60);
+    const y = endObj.getFullYear();
+    const m = String(endObj.getMonth() + 1).padStart(2, '0');
+    const d = String(endObj.getDate()).padStart(2, '0');
+    await syncRecurringTemplateForRange(template, targetDate, `${y}-${m}-${d}`);
+    return;
+  }
+
+  // Case 3: Existing recurring item stays recurring
+  if (wasRecurring && isRecurring) {
+    patch.recurrenceId = originalItem.recurrenceId;
+    patch.isRecurring = true;
+
+    if (editMode === 'following' || editMode === 'all') {
+      const fromDate = editMode === 'all' ? '0000-00-00' : targetDate;
+      await updateFutureRecurringInstances(originalItem.recurrenceId, fromDate, itemType, patch);
+      
+      const templates = await getRecurringTemplates();
+      const t = templates.find(x => x.recurrenceId === originalItem.recurrenceId);
+      if (t) {
+        Object.assign(t, patch);
+        await updateRecurringTemplate(t.id, t);
+
+        // Re-sync range
+        const endObj = new Date(targetDate);
+        endObj.setDate(endObj.getDate() + 60);
+        const y = endObj.getFullYear();
+        const m = String(endObj.getMonth() + 1).padStart(2, '0');
+        const d = String(endObj.getDate()).padStart(2, '0');
+        await syncRecurringTemplateForRange(t, targetDate, `${y}-${m}-${d}`);
+      }
+    } else {
+      // only-this
+      if (itemType === 'task') {
+        await updateTask(targetDate, originalItem.id, patch);
+      } else {
+        await updateBlock(targetDate, originalItem.id, patch);
+      }
+    }
+    return;
+  }
+
+  // Case 4: Non-recurring item stays non-recurring
+  if (originalItem?.id) {
+    if (itemType === 'task') {
+      await updateTask(targetDate, originalItem.id, patch);
+    } else {
+      await updateBlock(targetDate, originalItem.id, patch);
+    }
+  } else {
+    if (itemType === 'task') {
+      await addTask(targetDate, patch);
+    } else {
+      await addBlock(targetDate, patch);
+    }
+  }
+}
+
 
 
 

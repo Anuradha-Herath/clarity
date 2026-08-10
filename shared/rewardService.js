@@ -6,6 +6,7 @@
  */
 
 import { get, set, getAuth, generateId, todayKey } from './storage.js';
+import { showConfirm } from './dialog.js';
 
 // ─── Configurable Constants ──────────────────────────────────────────────────
 export const WORK_TO_REWARD_RATIO = 0.5; // 2:1 ratio (e.g. 60m focus = 30m reward)
@@ -424,7 +425,8 @@ function mountTimerWidgetDOM(session, userId) {
     // Bind stop click
     const btnStop = widget.querySelector('#btn-end-reward-early');
     btnStop.onclick = async () => {
-      if (confirm('End reward session early? Any unused full minutes will be refunded.')) {
+      const confirmed = await showConfirm('End reward session early? Any unused full minutes will be refunded.', 'End Reward Session');
+      if (confirmed) {
         await endActiveSession(userId, true);
         removeTimerWidgetDOM();
       }

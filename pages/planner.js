@@ -19,7 +19,7 @@ import {
   carryForwardTasks,
   addRecurringTemplate, updateFutureRecurringInstances, removeFutureRecurringInstances,
   syncRecurringTemplateForRange, deleteRecurringTemplate, getRecurringTemplates,
-  autoGenerateRecurringInstances,
+  autoGenerateRecurringInstances, handleRecurringItemUpdate,
   getHabits, saveHabits,
   getMIT, setMIT, toggleMITTask, getUserDisplayName, formatHour
 } from '../shared/storage.js';
@@ -27,7 +27,7 @@ import {
 import { generateHabitInstances } from '../shared/habitEngine.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
-import { showConfirm, showAlert } from '../shared/dialog.js';
+import { showConfirm, showAlert, showChoiceDialog } from '../shared/dialog.js';
 import { getSriLankanHoliday } from '../shared/holidays.js';
 
 import {
@@ -1923,56 +1923,43 @@ async function saveTask() {
   const patch = { title, priority, timeEstimate, category, subtasks, linkedGoalId, isRecurring, recurrencePattern };
 
   if (editingTask) {
-    if (editingTask.habitId || editingTask.isRecurring) {
-      const titleChanged = title !== editingTask.title;
-      const priorityChanged = priority !== editingTask.priority;
-      const categoryChanged = category !== editingTask.category;
-      const estimateChanged = timeEstimate !== editingTask.timeEstimate;
-      const subtasksChanged = JSON.stringify(subtasks) !== JSON.stringify(editingTask.subtasks || []);
-      const goalChanged = linkedGoalId !== (editingTask.linkedGoalId || null);
-      const recurrenceChanged = isRecurring !== editingTask.isRecurring || JSON.stringify(recurrencePattern) !== JSON.stringify(editingTask.recurrencePattern || null);
-      const dateChanged = newDate !== targetDate;
-      
-      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged || goalChanged || recurrenceChanged || dateChanged) {
-        habitConfirmModalOverlay.classList.remove('hidden');
-        btnHabitConfirmSave.onclick = async () => {
-          const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
-          if (editingTask.habitId) {
-            await updateTask(targetDate, editingTask.id, patch, editMode);
-          } else if (editingTask.isRecurring) {
-            if (editMode === 'following') {
-              await updateFutureRecurringInstances(editingTask.recurrenceId, targetDate, 'task', patch);
-              const templates = await getRecurringTemplates();
-              const t = templates.find(x => x.recurrenceId === editingTask.recurrenceId);
-              if (t) {
-                Object.assign(t, patch);
-                await updateRecurringTemplate(t.id, t);
-              }
-            } else {
-              await updateTask(targetDate, editingTask.id, patch);
-            }
-          }
-          
-          if (newDate !== targetDate) {
-            const allTasks = await getTasks(targetDate);
-            const updatedTask = allTasks.find(t => t.id === editingTask.id);
-            if (updatedTask) {
-              await deleteTask(targetDate, editingTask.id);
-              await addTask(newDate, updatedTask);
-            }
-          }
-          
-          closeHabitConfirmModal();
-          closeTaskModal();
-          await refreshActiveTab();
-          try {
-            if (editingTask.habitId) await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
-          } catch (e) {}
-        };
-        return;
-      }
+    patch.id = editingTask.id;
+    patch.done = !!editingTask.done;
+    if (editingTask.recurrenceId) patch.recurrenceId = editingTask.recurrenceId;
+
+    const isOrWasRecurring = editingTask.isRecurring || isRecurring;
+
+    if (isOrWasRecurring && !editingTask.habitId) {
+      const recurrenceChoice = await showChoiceDialog({
+        title: 'Edit Recurring Task',
+        message: 'How would you like to apply your changes to this task?',
+        choices: [
+          { value: 'only-this', label: 'This task only', description: 'Changes affect only today\'s task.' },
+          { value: 'following', label: 'This and future tasks', description: 'Changes affect this and all future recurring tasks.' },
+          { value: 'all', label: 'All tasks (Template)', description: 'Changes template and updates all tasks.' }
+        ],
+        defaultChoice: 'following',
+        confirmText: 'Save Task'
+      });
+
+      if (!recurrenceChoice) return; // User cancelled
+
+      await handleRecurringItemUpdate('task', editingTask, patch, targetDate, recurrenceChoice);
+    } else if (editingTask.habitId) {
+      habitConfirmModalOverlay.classList.remove('hidden');
+      btnHabitConfirmSave.onclick = async () => {
+        const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
+        await updateTask(targetDate, editingTask.id, patch, editMode);
+        closeHabitConfirmModal();
+        closeTaskModal();
+        await refreshActiveTab();
+        try { await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' }); } catch (e) {}
+      };
+      return;
+    } else {
+      await handleRecurringItemUpdate('task', editingTask, patch, targetDate, 'only-this');
     }
-    await updateTask(targetDate, editingTask.id, patch);
+
     if (newDate !== targetDate) {
       const allTasks = await getTasks(targetDate);
       const updatedTask = allTasks.find(t => t.id === editingTask.id);
@@ -1984,33 +1971,9 @@ async function saveTask() {
   } else {
     patch.id = generateId();
     patch.done = false;
-    
-    if (isRecurring) {
-      patch.recurrenceId = generateId();
-      const template = {
-        id: generateId(),
-        recurrenceId: patch.recurrenceId,
-        itemType: 'task',
-        startDate: newDate,
-        title: patch.title,
-        priority: patch.priority,
-        timeEstimate: patch.timeEstimate,
-        category: patch.category,
-        linkedGoalId: patch.linkedGoalId,
-        recurrencePattern: patch.recurrencePattern
-      };
-      await addRecurringTemplate(template);
-      
-      const endObj = new Date(newDate);
-      endObj.setDate(endObj.getDate() + 30);
-      const y = endObj.getFullYear();
-      const m = String(endObj.getMonth() + 1).padStart(2, '0');
-      const d = String(endObj.getDate()).padStart(2, '0');
-      await syncRecurringTemplateForRange(template, newDate, `${y}-${m}-${d}`);
-    } else {
-      await addTask(newDate, patch);
-    }
+    await handleRecurringItemUpdate('task', null, patch, newDate, 'following');
   }
+
   closeTaskModal();
   await refreshActiveTab();
 }
