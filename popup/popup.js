@@ -21,6 +21,7 @@ import {
   signOut,
   pullLatestFromCloud,
 } from '../shared/storage.js';
+import { attachClockPicker } from '../shared/clockPicker.js';
 
 // ─── Page URLs ─────────────────────────────────────────────────────────────────
 const PAGES = {
@@ -48,6 +49,9 @@ const btnInboxClose   = document.getElementById('btn-inbox-close');
 const btnSettingsClose= document.getElementById('btn-settings-close');
 const setMorning      = document.getElementById('set-morning');
 const setNight        = document.getElementById('set-night');
+
+if (setMorning) attachClockPicker(setMorning);
+if (setNight) attachClockPicker(setNight);
 const storageUsed     = document.getElementById('storage-used');
 const storageWarning  = document.getElementById('storage-warning');
 const btnSaveSettings = document.getElementById('btn-save-settings');

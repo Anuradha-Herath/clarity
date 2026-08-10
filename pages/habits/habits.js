@@ -10,6 +10,7 @@ import {
 } from '../../shared/storage.js';
 
 import { showConfirm, showAlert } from '../../shared/dialog.js';
+import { attachClockPicker } from '../../shared/clockPicker.js';
 
 // SVG Definitions for preset icons
 const HABIT_ICONS = {
@@ -455,6 +456,7 @@ function addTimeSlotRow(time = '08:00', label = '') {
       await showAlert('A habit must have at least one time slot!', 'Time Slot Required');
     }
   });
+  attachClockPicker(row.querySelector('.timeslot-input-time'));
   timeSlotsContainer.appendChild(row);
 }
 

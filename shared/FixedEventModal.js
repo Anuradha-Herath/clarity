@@ -7,6 +7,7 @@
 import { getCustomCategories, getAuth, todayKey } from './storage.js';
 import { addFixedEvent, updateFixedEvent, deleteFixedEvent, toggleFixedEventComplete } from './fixedEventsService.js';
 import { showConfirm, showAlert } from './dialog.js';
+import { attachClockPicker } from './clockPicker.js';
 
 let modalOverlay = null;
 let currentEvent = null;
@@ -216,6 +217,9 @@ function ensureModalHtml() {
       selectType(btn.dataset.type);
     });
   });
+
+  attachClockPicker(modalOverlay.querySelector('#fe-time'));
+  attachClockPicker(modalOverlay.querySelector('#fe-endtime'));
 
   saveBtn.addEventListener('click', handleSave);
   deleteBtn.addEventListener('click', handleDelete);

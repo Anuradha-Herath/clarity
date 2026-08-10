@@ -1,5 +1,6 @@
 import { get, set, todayKey, dateKey, generateId, getSettings } from './storage.js';
 import { showConfirm } from './dialog.js';
+import { attachClockPicker } from './clockPicker.js';
 
 /**
  * Update the streak logic
@@ -128,6 +129,7 @@ export async function mountNightNudge() {
   `;
   
   overlay.classList.add('active');
+  attachClockPicker(document.getElementById('nn-time'));
   
   document.getElementById('nn-cancel').addEventListener('click', () => {
     closeOverlay();
@@ -266,6 +268,7 @@ async function mountAdjustMode(overlay, dateStr, currentTasks, defaultTime) {
   `;
   
   overlay.classList.add('active');
+  attachClockPicker(document.getElementById('mp-time'));
   
   document.getElementById('mp-cancel-adjust').addEventListener('click', () => {
     closeOverlay();

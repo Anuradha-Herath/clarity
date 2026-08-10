@@ -8,11 +8,15 @@ import {
   signOut,
   pullLatestFromCloud,
 } from '../../shared/storage.js';
+import { attachClockPicker } from '../../shared/clockPicker.js';
 
 const chkMorningPulse = document.getElementById('chk-morning-pulse');
 const setMorning      = document.getElementById('set-morning');
 const chkNightNudge   = document.getElementById('chk-night-nudge');
 const setNight        = document.getElementById('set-night');
+
+if (setMorning) attachClockPicker(setMorning);
+if (setNight) attachClockPicker(setNight);
 const chkReprompt     = document.getElementById('chk-reprompt');
 const chkAutoCarry    = document.getElementById('chk-auto-carry');
 const btnSave         = document.getElementById('btn-save-settings');

@@ -24,6 +24,7 @@ import {
 } from './storage.js';
 
 import { showConfirm, showAlert, showChoiceDialog } from './dialog.js';
+import { attachClockPicker } from './clockPicker.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const BOARD_START = 6;    // 6 AM
@@ -1243,6 +1244,9 @@ function buildBlockModal(getBlockDate) {
 
   const q = (sel) => overlay.querySelector(sel);
   
+  attachClockPicker(q('[data-start]'));
+  attachClockPicker(q('[data-end]'));
+
   const repeatToggle = q('[data-repeat-toggle]');
   const repeatSettings = q('[data-repeat-settings]');
   const repeatPattern = q('[data-repeat-pattern]');

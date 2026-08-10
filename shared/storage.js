@@ -137,8 +137,20 @@ export function decimalToTime(h) {
  * @returns {number}
  */
 export function timeToDec(t) {
-  const [h, m] = t.split(':').map(Number);
-  return h + m / 60;
+  if (!t || typeof t !== 'string') return 0;
+  const str = t.trim();
+  const ampmMatch = str.match(/(AM|PM)/i);
+  if (ampmMatch) {
+    const ampm = ampmMatch[1].toUpperCase();
+    const parts = str.replace(/(AM|PM)/i, '').trim().split(':');
+    let h = parseInt(parts[0], 10) || 0;
+    const m = parseInt(parts[1], 10) || 0;
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return h + m / 60;
+  }
+  const [h, m] = str.split(':').map(Number);
+  return (h || 0) + (m || 0) / 60;
 }
 
 /**
