@@ -111,12 +111,12 @@ export function dateKey(days = 0) {
 }
 
 /**
- * Snap a decimal hour value to the nearest 0.5 increment (30-min slots).
+ * Snap a decimal hour value to the nearest 0.25 increment (15-min slots).
  * @param {number} h
  * @returns {number}
  */
 export function snapHour(h) {
-  return Math.round(h * 2) / 2;
+  return Math.round(h * 4) / 4;
 }
 
 /**
@@ -137,8 +137,20 @@ export function decimalToTime(h) {
  * @returns {number}
  */
 export function timeToDec(t) {
-  const [h, m] = t.split(':').map(Number);
-  return h + m / 60;
+  if (!t || typeof t !== 'string') return 0;
+  const str = t.trim();
+  const ampmMatch = str.match(/(AM|PM)/i);
+  if (ampmMatch) {
+    const ampm = ampmMatch[1].toUpperCase();
+    const parts = str.replace(/(AM|PM)/i, '').trim().split(':');
+    let h = parseInt(parts[0], 10) || 0;
+    const m = parseInt(parts[1], 10) || 0;
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return h + m / 60;
+  }
+  const [h, m] = str.split(':').map(Number);
+  return (h || 0) + (m || 0) / 60;
 }
 
 /**
@@ -1479,12 +1491,19 @@ export function jsToFirestore(data) {
   return { fields };
 }
 
+let syncPausedUntil = 0;
+
 /**
  * Pull all data documents from Firestore and populate local storage.
  */
 export async function pullLatestFromCloud() {
   const auth = await getAuth();
   if (!auth) return;
+
+  // If sync is paused due to rate limits (HTTP 429), skip until cooldown expires
+  if (syncPausedUntil && Date.now() < syncPausedUntil) {
+    return;
+  }
 
   // 1. Pull user data (tasks, blocks, settings, etc.)
   try {
@@ -1514,6 +1533,10 @@ export async function pullLatestFromCloud() {
           }
         }
       }
+    } else if (res.status === 429) {
+      // Pause automatic syncing silently for 5 minutes when Firebase API quota limit is reached
+      syncPausedUntil = Date.now() + 300000;
+      return;
     } else if (res.status !== 404) {
       console.warn('[Sync] Pull from cloud (data) failed:', await res.text());
     }
@@ -1542,6 +1565,8 @@ export async function pullLatestFromCloud() {
         if (JSON.stringify(localEvents) !== JSON.stringify(firestoreEvents)) {
           await chrome.storage.local.set({ fixed_events: firestoreEvents });
         }
+      } else if (res.status === 429) {
+        syncPausedUntil = Date.now() + 300000;
       } else if (res.status !== 404) {
         console.warn('[Sync] Pull from cloud (fixed_events) failed:', await res.text());
       }
@@ -1984,6 +2009,8 @@ export async function syncRecurringTemplateForRange(template, startDate, endDate
             priority: template.priority || 3,
             timeEstimate: template.timeEstimate || 15,
             category: template.category || 'Personal',
+            subtasks: template.subtasks ? JSON.parse(JSON.stringify(template.subtasks)) : [],
+            linkedGoalId: template.linkedGoalId || null,
             isRecurring: true,
             recurrencePattern: template.recurrencePattern,
             recurrenceId: template.recurrenceId
@@ -2114,3 +2141,399 @@ export async function autoGenerateRecurringInstances(dateStr) {
     }
   }
 }
+
+// ─── Auto-Reschedule & Rolling Queue Helpers ─────────────────────────────────
+
+/**
+ * Find the next available free time slot of `duration` hours on `dateStr` starting from `startFromHour`.
+ * @param {string} dateStr "YYYY-MM-DD"
+ * @param {number} duration Duration in hours (e.g., 0.5 for 30 min)
+ * @param {number} startFromHour Decimal hour to start searching from (e.g., 12.5 for 12:30 PM)
+ * @param {Array<string>} ignoreBlockIds Optional list of block IDs to ignore (e.g. blocks being moved)
+ * @returns {Promise<{start: number, end: number}|null>}
+ */
+export async function findNextFreeSlot(dateStr, duration, startFromHour = 6, ignoreBlockIds = []) {
+  const blocks = (await getBlocks(dateStr)) ?? [];
+  const activeBlocks = blocks
+    .filter(b => !ignoreBlockIds.includes(b.id))
+    .sort((a, b) => a.start - b.start);
+
+  const STEP = 0.25; // check every 15 mins
+  const BOARD_START = 6;
+  const BOARD_END = 24;
+
+  let currentCandidate = Math.max(BOARD_START, Math.ceil(startFromHour * 4) / 4);
+
+  while (currentCandidate + duration <= BOARD_END) {
+    const candidateEnd = currentCandidate + duration;
+    let overlaps = false;
+
+    for (const b of activeBlocks) {
+      // Overlap check
+      if (Math.max(currentCandidate, b.start) < Math.min(candidateEnd, b.end)) {
+        overlaps = true;
+        // Fast forward to end of overlapping block
+        currentCandidate = Math.ceil(b.end * 4) / 4;
+        break;
+      }
+    }
+
+    if (!overlaps) {
+      return { start: currentCandidate, end: candidateEnd };
+    }
+  }
+
+  return null; // No available slot found on this date
+}
+
+/**
+ * Auto-reschedules specified blocks on `dateStr` into open free slots after `startFromHour`.
+ * Inserts a 15-minute transition/rest buffer between consecutive tasks.
+ * Automatically defers overflow tasks beyond evening limit (9 PM / max 3 evening tasks) to tomorrow.
+ * @param {string} dateStr "YYYY-MM-DD"
+ * @param {Array<string>} blockIds Array of block IDs to reschedule
+ * @param {number} startFromHour Starting decimal hour
+ * @param {number} bufferHours Buffer duration between tasks (default 0.25 = 15 mins)
+ * @returns {Promise<{rescheduledCount: number, deferredCount: number}>} Summary of actions taken
+ */
+export async function autoRescheduleBlocks(dateStr, blockIds, startFromHour, bufferHours = 0.25) {
+  let blocks = (await getBlocks(dateStr)) ?? [];
+  if (!blockIds || blockIds.length === 0) return { rescheduledCount: 0, deferredCount: 0 };
+
+  const targetBlocks = blocks.filter(b => blockIds.includes(b.id));
+
+  const EVENING_CUTOFF = 21.0; // 9:00 PM max limit for focus work
+  const MAX_TODAY_RESCHEDULE = 3; // Max 3 tasks allowed to be added to evening to prevent burnout
+  
+  let rescheduledCount = 0;
+  const overflowBlockIds = [];
+
+  for (const b of targetBlocks) {
+    if (rescheduledCount >= MAX_TODAY_RESCHEDULE) {
+      overflowBlockIds.push(b.id);
+      continue;
+    }
+
+    const duration = Math.max(0.25, (b.end ?? 0.5) - (b.start ?? 0));
+    const freeSlot = await findNextFreeSlot(dateStr, duration, startFromHour, [b.id]);
+
+    if (freeSlot && freeSlot.end <= EVENING_CUTOFF) {
+      if (!b.rescheduledFrom) {
+        b.rescheduledFrom = b.start;
+      }
+      b.start = freeSlot.start;
+      b.end = freeSlot.end;
+      b.rescheduled = true;
+      // Insert transition buffer before next candidate task
+      startFromHour = freeSlot.end + bufferHours;
+      rescheduledCount++;
+    } else {
+      // Cannot fit today cleanly with buffer before cutoff
+      overflowBlockIds.push(b.id);
+    }
+  }
+
+  await setBlocks(dateStr, blocks);
+
+  return { rescheduledCount, deferredCount: overflowBlockIds.length };
+}
+
+/**
+ * Defer specified blocks from `fromDateStr` to `toDateStr`.
+ * @param {string} fromDateStr "YYYY-MM-DD"
+ * @param {string} toDateStr "YYYY-MM-DD"
+ * @param {Array<string>} blockIds Array of block IDs to move
+ * @returns {Promise<void>}
+ */
+export async function deferBlocksToDate(fromDateStr, toDateStr, blockIds) {
+  let fromBlocks = (await getBlocks(fromDateStr)) ?? [];
+  let toBlocks = (await getBlocks(toDateStr)) ?? [];
+
+  const blocksToMove = fromBlocks.filter(b => blockIds.includes(b.id));
+  fromBlocks = fromBlocks.filter(b => !blockIds.includes(b.id));
+
+  let startFrom = 9.0; // Start scheduling tomorrow from 9 AM
+  const BUFFER_HOURS = 0.25;
+
+  // Collect recurrenceIds that need an exception added for fromDate,
+  // so autoGenerateRecurringInstances won't re-create them on today.
+  const recurringIds = blocksToMove
+    .filter(b => b.recurrenceId)
+    .map(b => b.recurrenceId);
+
+  if (recurringIds.length > 0) {
+    const templates = await getRecurringTemplates();
+    let changed = false;
+    for (const tmpl of templates) {
+      if (recurringIds.includes(tmpl.recurrenceId)) {
+        if (!tmpl.exceptions) tmpl.exceptions = [];
+        if (!tmpl.exceptions.includes(fromDateStr)) {
+          tmpl.exceptions.push(fromDateStr);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      await saveRecurringTemplates(templates);
+    }
+  }
+
+  for (const b of blocksToMove) {
+    const duration = Math.max(0.25, (b.end ?? 0.5) - (b.start ?? 0));
+    const freeSlot = await findNextFreeSlot(toDateStr, duration, startFrom);
+    if (freeSlot) {
+      b.start = freeSlot.start;
+      b.end = freeSlot.end;
+      startFrom = freeSlot.end + BUFFER_HOURS;
+    }
+    // Give the deferred copy a fresh id so it won't collide with tomorrow's
+    // recurring instance generated by syncRecurringTemplateForRange.
+    // Keep recurrenceId so the deferred block is still visually linked, but
+    // the tomorrow recurring sync won't duplicate it because it checks by
+    // recurrenceId existence on toBlocks which we're about to push.
+    b.id = generateId();
+    b.deferred = true;
+    b.deferredFromDate = fromDateStr;
+    toBlocks.push(b);
+  }
+
+  await setBlocks(fromDateStr, fromBlocks);
+  await setBlocks(toDateStr, toBlocks);
+}
+
+// ─── Normal Scheduling Auto-Buffer Preference ─────────────────────────────────
+
+/**
+ * Get current auto-buffer setting in minutes (e.g. 10).
+ * @returns {Promise<number>}
+ */
+export async function getAutoBufferMinutes() {
+  const val = await get('auto_buffer_minutes');
+  return val !== undefined ? Number(val) : 15; // Default 15 minutes
+}
+
+/**
+ * Save auto-buffer setting in minutes.
+ * @param {number} mins 0, 5, 10, or 15
+ * @returns {Promise<void>}
+ */
+export async function setAutoBufferMinutes(mins) {
+  await set('auto_buffer_minutes', Number(mins));
+}
+
+// ─── Most Important Tasks (MIT) Helpers ─────────────────────────────────────
+
+/**
+ * Get MIT object for a date: { taskIds: [id1, id2, id3] }
+ * @param {string} date "YYYY-MM-DD"
+ * @returns {Promise<{taskIds: Array<string>}>}
+ */
+export async function getMIT(date) {
+  const data = await get(`mit_${date}`);
+  return data && Array.isArray(data.taskIds) ? data : { taskIds: [] };
+}
+
+/**
+ * Save MIT object for a date.
+ * @param {string} date "YYYY-MM-DD"
+ * @param {object} mitData { taskIds: [...] }
+ * @returns {Promise<void>}
+ */
+export async function setMIT(date, mitData) {
+  await set(`mit_${date}`, mitData);
+}
+
+/**
+ * Toggle MIT status for a task on a given date. Max 3 per day.
+ * @param {string} date "YYYY-MM-DD"
+ * @param {string} taskId
+ * @returns {Promise<{success: boolean, isMIT?: boolean, reason?: string, message?: string}>}
+ */
+export async function toggleMITTask(date, taskId) {
+  const mit = await getMIT(date);
+  let taskIds = [...(mit.taskIds || [])];
+  const isCurrentlyMIT = taskIds.includes(taskId);
+
+  if (isCurrentlyMIT) {
+    taskIds = taskIds.filter(id => id !== taskId);
+    await setMIT(date, { taskIds });
+    await updateTask(date, taskId, { isMIT: false });
+    return { success: true, isMIT: false, taskIds };
+  } else {
+    if (taskIds.length >= 3) {
+      return {
+        success: false,
+        reason: 'full',
+        message: 'You already have 3 MITs for today. Complete or unmark one first.'
+      };
+    }
+    taskIds.push(taskId);
+    await setMIT(date, { taskIds });
+    await updateTask(date, taskId, { isMIT: true });
+    return { success: true, isMIT: true, taskIds };
+  }
+}
+
+/**
+ * Helper to get user display name for celebration header.
+ * @returns {Promise<string>}
+ */
+export async function getUserDisplayName() {
+  try {
+    const settings = await getSettings();
+    if (settings && (settings.userName || settings.name)) {
+      return settings.userName || settings.name;
+    }
+    const auth = await getAuth();
+    if (auth && auth.email) {
+      const namePart = auth.email.split('@')[0];
+      return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+    }
+  } catch (_) {}
+  return "Anuradha";
+}
+
+/**
+ * Handle saving/updating a recurring or non-recurring item (task or block).
+ * Manages template creation, deletion, pattern sync, and future instance updates based on editMode.
+ */
+export async function handleRecurringItemUpdate(itemType, originalItem, patch, targetDate, editMode = 'following') {
+  const wasRecurring = !!originalItem?.isRecurring && !!originalItem?.recurrenceId;
+  const isRecurring = !!patch.isRecurring;
+  const recurrenceId = patch.recurrenceId || originalItem?.recurrenceId || generateId();
+
+  // Case 1: Toggled OFF recurring
+  if (wasRecurring && !isRecurring) {
+    patch.recurrenceId = null;
+    patch.recurrencePattern = null;
+    patch.isRecurring = false;
+
+    if (editMode === 'following' || editMode === 'all') {
+      await removeFutureRecurringInstances(originalItem.recurrenceId, targetDate, itemType);
+      const templates = await getRecurringTemplates();
+      const t = templates.find(x => x.recurrenceId === originalItem.recurrenceId);
+      if (t) await deleteRecurringTemplate(t.id);
+    } else {
+      // only-this instance
+      const templates = await getRecurringTemplates();
+      const t = templates.find(x => x.recurrenceId === originalItem.recurrenceId);
+      if (t) {
+        if (!t.exceptions) t.exceptions = [];
+        if (!t.exceptions.includes(targetDate)) t.exceptions.push(targetDate);
+        await updateRecurringTemplate(t.id, { exceptions: t.exceptions });
+      }
+    }
+
+    if (itemType === 'task') {
+      await updateTask(targetDate, originalItem.id, patch);
+    } else {
+      await updateBlock(targetDate, originalItem.id, patch);
+    }
+    return;
+  }
+
+  // Case 2: Toggled ON recurring (or new recurring item)
+  if (!wasRecurring && isRecurring) {
+    patch.recurrenceId = recurrenceId;
+    patch.isRecurring = true;
+
+    const template = {
+      id: generateId(),
+      recurrenceId,
+      itemType,
+      startDate: targetDate,
+      title: patch.title,
+      recurrencePattern: patch.recurrencePattern,
+      ...(itemType === 'task' ? {
+        priority: patch.priority || 3,
+        timeEstimate: patch.timeEstimate || 15,
+        category: patch.category || 'Personal',
+        subtasks: patch.subtasks || [],
+        linkedGoalId: patch.linkedGoalId || null
+      } : {
+        cat: patch.cat || patch.category || 'Personal',
+        start: patch.start,
+        end: patch.end,
+        isInfrastructure: !!patch.isInfrastructure
+      })
+    };
+    await addRecurringTemplate(template);
+
+    if (originalItem?.id) {
+      if (itemType === 'task') {
+        await updateTask(targetDate, originalItem.id, patch);
+      } else {
+        await updateBlock(targetDate, originalItem.id, patch);
+      }
+    } else {
+      if (itemType === 'task') {
+        await addTask(targetDate, patch);
+      } else {
+        await addBlock(targetDate, patch);
+      }
+    }
+
+    // Sync future dates (60 days)
+    const endObj = new Date(targetDate);
+    endObj.setDate(endObj.getDate() + 60);
+    const y = endObj.getFullYear();
+    const m = String(endObj.getMonth() + 1).padStart(2, '0');
+    const d = String(endObj.getDate()).padStart(2, '0');
+    await syncRecurringTemplateForRange(template, targetDate, `${y}-${m}-${d}`);
+    return;
+  }
+
+  // Case 3: Existing recurring item stays recurring
+  if (wasRecurring && isRecurring) {
+    patch.recurrenceId = originalItem.recurrenceId;
+    patch.isRecurring = true;
+
+    if (editMode === 'following' || editMode === 'all') {
+      const fromDate = editMode === 'all' ? '0000-00-00' : targetDate;
+      await updateFutureRecurringInstances(originalItem.recurrenceId, fromDate, itemType, patch);
+      
+      const templates = await getRecurringTemplates();
+      const t = templates.find(x => x.recurrenceId === originalItem.recurrenceId);
+      if (t) {
+        Object.assign(t, patch);
+        await updateRecurringTemplate(t.id, t);
+
+        // Re-sync range
+        const endObj = new Date(targetDate);
+        endObj.setDate(endObj.getDate() + 60);
+        const y = endObj.getFullYear();
+        const m = String(endObj.getMonth() + 1).padStart(2, '0');
+        const d = String(endObj.getDate()).padStart(2, '0');
+        await syncRecurringTemplateForRange(t, targetDate, `${y}-${m}-${d}`);
+      }
+    } else {
+      // only-this
+      if (itemType === 'task') {
+        await updateTask(targetDate, originalItem.id, patch);
+      } else {
+        await updateBlock(targetDate, originalItem.id, patch);
+      }
+    }
+    return;
+  }
+
+  // Case 4: Non-recurring item stays non-recurring
+  if (originalItem?.id) {
+    if (itemType === 'task') {
+      await updateTask(targetDate, originalItem.id, patch);
+    } else {
+      await updateBlock(targetDate, originalItem.id, patch);
+    }
+  } else {
+    if (itemType === 'task') {
+      await addTask(targetDate, patch);
+    } else {
+      await addBlock(targetDate, patch);
+    }
+  }
+}
+
+
+
+
+

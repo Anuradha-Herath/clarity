@@ -13,17 +13,23 @@
  */
 
 import {
-  getBlocks, addBlock, updateBlock, deleteBlock,
+  getBlocks, addBlock, updateBlock, deleteBlock, setBlocks,
   generateId, snapHour, formatHour, timeToDec, decimalToTime, todayKey,
   getCustomCategories,
   getRecurringTemplates, addRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate,
-  syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances
+  syncRecurringTemplateForRange, updateFutureRecurringInstances, removeFutureRecurringInstances, handleRecurringItemUpdate,
+  findNextFreeSlot, autoRescheduleBlocks, deferBlocksToDate,
+  getAutoBufferMinutes, setAutoBufferMinutes,
+  getMIT, setMIT, toggleMITTask
 } from './storage.js';
+
+import { showConfirm, showAlert, showChoiceDialog } from './dialog.js';
+import { attachClockPicker } from './clockPicker.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const BOARD_START = 6;    // 6 AM
 const BOARD_END   = 24;   // 12 AM (Midnight)
-const PX_PER_HOUR = 48;   // pixels per hour
+const PX_PER_HOUR = 64;   // pixels per hour
 const TOTAL_HOURS = BOARD_END - BOARD_START; // 18
 
 export function getCategoryColor(cat) {
@@ -76,6 +82,94 @@ function cancelAlarm(id) {
   try { chrome.runtime.sendMessage({ type: 'CANCEL_BLOCK_ALARM', blockId: id }); } catch (_) {}
 }
 
+// ─── Non-blocking bump-fail toast ─────────────────────────────────────────────
+/**
+ * Shows a brief inline toast when Bump can't fit a task.
+ * Offers a "Defer to Tomorrow" button instead of blocking alert().
+ */
+function showBumpFailToast(block, date) {
+  // Remove any existing toast
+  document.querySelectorAll('[data-bump-fail-toast]').forEach(el => el.remove());
+
+  const toast = document.createElement('div');
+  toast.setAttribute('data-bump-fail-toast', '');
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1E293B;
+    color: #F1F5F9;
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 13px;
+    font-family: inherit;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 99999;
+    max-width: 420px;
+    animation: toastSlideUp 0.22s ease;
+  `;
+
+  // Inject keyframe once
+  if (!document.getElementById('bump-toast-style')) {
+    const s = document.createElement('style');
+    s.id = 'bump-toast-style';
+    s.textContent = `
+      @keyframes toastSlideUp {
+        from { opacity:0; transform:translateX(-50%) translateY(12px); }
+        to   { opacity:1; transform:translateX(-50%) translateY(0); }
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  const msg = document.createElement('span');
+  msg.textContent = '⚠️ No room left today with buffer.';
+  toast.appendChild(msg);
+
+  const deferBtn = document.createElement('button');
+  deferBtn.textContent = '🌅 Defer to Tomorrow';
+  deferBtn.style.cssText = `
+    background: #4F46E5; color: #fff; border: none; border-radius: 6px;
+    padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+    white-space: nowrap; flex-shrink: 0;
+  `;
+  deferBtn.addEventListener('click', async () => {
+    toast.remove();
+    const { getTomorrowKey: _t } = await import('./timeboard.js').catch(() => ({}));
+    // Compute tomorrow using local date arithmetic
+    const d = new Date(date + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    const tomorrow = [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, '0'),
+      String(d.getDate()).padStart(2, '0'),
+    ].join('-');
+    await deferBlocksToDate(date, tomorrow, [block.id]);
+    // Trigger board refresh if possible
+    if (typeof window._timeboardRefresh === 'function') window._timeboardRefresh();
+    else location.reload();
+  });
+  toast.appendChild(deferBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = `
+    background: transparent; color: #94A3B8; border: none;
+    font-size: 14px; cursor: pointer; padding: 2px 4px; flex-shrink: 0;
+  `;
+  closeBtn.addEventListener('click', () => toast.remove());
+  toast.appendChild(closeBtn);
+
+  document.body.appendChild(toast);
+
+  // Auto-dismiss after 6 seconds
+  setTimeout(() => toast?.remove(), 6000);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // mountTimeboard — main export
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -84,6 +178,8 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   let date   = initialDate;
   let blocks = [];
+  let bannerDismissed = false;
+  let activeBufferMins = 10;
 
   // Drag state
   let dragCreate = null; // { startHour, endHour, ghost }
@@ -95,11 +191,98 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   containerEl.innerHTML = '';
   containerEl.style.position = 'relative';
 
+  // Buffer Control Pill Header Bar
+  const bufferControlBar = document.createElement('div');
+  bufferControlBar.style.cssText = `
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px 6px 56px;
+    background: #F8FAFC;
+    border-bottom: 1px solid #E2E8F0;
+    font-size: 11px;
+    color: #475569;
+  `;
+  bufferControlBar.innerHTML = `
+    <div style="display:flex; align-items:center; gap:6px;">
+      <span style="font-weight:600;">Time Drift Protection:</span>
+      <span style="opacity:0.8;">Auto-inserts rest breaks so schedules stay on track</span>
+    </div>
+    <button data-buffer-pill style="
+      background: #EEF2FF;
+      color: #4F46E5;
+      border: 1px solid #C7D2FE;
+      border-radius: 12px;
+      padding: 2px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 150ms ease;
+    ">
+      🛡️ Buffer: 10m
+    </button>
+  `;
+  containerEl.appendChild(bufferControlBar);
+
+  const bufferPillBtn = bufferControlBar.querySelector('[data-buffer-pill]');
+  function updateBufferPillText() {
+    if (!bufferPillBtn) return;
+    if (activeBufferMins === 0) {
+      bufferPillBtn.textContent = '🛡️ Buffer: Off';
+      bufferPillBtn.style.background = '#F1F5F9';
+      bufferPillBtn.style.color = '#64748B';
+      bufferPillBtn.style.borderColor = '#CBD5E1';
+    } else {
+      bufferPillBtn.textContent = `🛡️ Buffer: ${activeBufferMins}m`;
+      bufferPillBtn.style.background = '#EEF2FF';
+      bufferPillBtn.style.color = '#4F46E5';
+      bufferPillBtn.style.borderColor = '#C7D2FE';
+    }
+  }
+
+  getAutoBufferMinutes().then(m => {
+    activeBufferMins = m;
+    updateBufferPillText();
+  });
+
+  bufferPillBtn?.addEventListener('click', async () => {
+    const options = [15, 30, 0];
+    const idx = options.indexOf(activeBufferMins);
+    activeBufferMins = options[(idx + 1) % options.length];
+    await setAutoBufferMinutes(activeBufferMins);
+    updateBufferPillText();
+    await renderBlocks();
+  });
+
+  // Rolling Queue Banner Top Bar
+  const bannerWrapper = document.createElement('div');
+  bannerWrapper.style.cssText = 'padding: 8px 12px 0 56px; display: none;';
+  
+  const bannerEl = document.createElement('div');
+  bannerEl.style.cssText = `
+    background: linear-gradient(135deg, #FEF2F2, #FFF7ED);
+    border: 1px solid #FCA5A5;
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    box-shadow: 0 2px 8px rgba(225, 29, 72, 0.08);
+  `;
+  bannerWrapper.appendChild(bannerEl);
+  containerEl.appendChild(bannerWrapper);
+
   const boardEl = document.createElement('div');
   boardEl.style.cssText = 'height:100%; overflow-y:auto; overflow-x:hidden; position:relative;';
 
   const innerEl = document.createElement('div');
-  innerEl.style.cssText = 'display:flex; position:relative;';
+  // Extra bottom padding so the midnight (12 AM) label is fully visible
+  innerEl.style.cssText = 'display:flex; position:relative; padding-bottom:56px;';
 
   // Labels column (56px wide, labels centered on line boundaries)
   const labelsEl = document.createElement('div');
@@ -129,8 +312,9 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   // Grid (fills remaining width, position:relative for absolute blocks)
   const gridEl = document.createElement('div');
+  // Add 40px extra so the midnight label (positioned at the very end) isn't clipped
   gridEl.style.cssText = `flex:1; position:relative; border-left:1px solid #CBD5E1;
-    height:${TOTAL_HOURS * PX_PER_HOUR}px; overflow:visible;`;
+    height:${TOTAL_HOURS * PX_PER_HOUR + 40}px; overflow:visible;`;
 
   // Slot lines
   const totalSlots = TOTAL_HOURS * 2; // 36 half-hour slots
@@ -154,6 +338,18 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   boardEl.appendChild(innerEl);
   containerEl.appendChild(boardEl);
 
+  // Helper date function — use local date components to avoid UTC offset bugs.
+  // toISOString() returns UTC, which in UTC+ timezones (e.g. IST +05:30) shifts
+  // midnight back to the previous day, making "tomorrow" resolve to today.
+  function getTomorrowKey(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
   // ── Now line updater ────────────────────────────────────────────────────────
   function updateNowLine() {
     const now   = new Date();
@@ -170,7 +366,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   const nowTimer = setInterval(updateNowLine, 30000);
 
   // ── Block rendering ─────────────────────────────────────────────────────────
-  function renderBlocks() {
+  async function renderBlocks() {
     gridEl.querySelectorAll('[data-block]').forEach(el => el.remove());
 
     const infraBlocks = [];
@@ -178,6 +374,64 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     for (const b of blocks) {
       if (b.isInfrastructure) infraBlocks.push(b);
       else normalBlocks.push(b);
+    }
+
+    // Detect missed tasks for Rolling Queue Banner
+    const now = new Date();
+    const currentDec = now.getHours() + now.getMinutes() / 60;
+    const isToday = date === todayKey();
+    const isPastDate = date < todayKey();
+
+    const missedBlocks = normalBlocks.filter(b => {
+      if (b.completed) return false;
+      return (isToday && b.end <= currentDec) || isPastDate;
+    });
+
+    if (missedBlocks.length > 0 && !bannerDismissed) {
+      bannerWrapper.style.display = 'block';
+      bannerEl.innerHTML = `
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:16px;">⚡</span>
+          <div>
+            <div style="font-size:13px; font-weight:700; color:#991B1B;">
+              ${missedBlocks.length} Missed Task${missedBlocks.length > 1 ? 's' : ''} Past Scheduled Time
+            </div>
+            <div style="font-size:11px; color:#7F1D1D; opacity:0.85;">
+              ${missedBlocks.map(b => esc(b.title || 'Untitled')).slice(0, 3).join(', ')}${missedBlocks.length > 3 ? ` +${missedBlocks.length - 3} more` : ''}
+            </div>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button data-auto-reschedule-all style="background:#E11D48; color:#FFF; border:none; border-radius:6px; padding:6px 12px; font-size:12px; font-weight:600; cursor:pointer; box-shadow:0 1px 3px rgba(225,29,72,0.3);">
+            ⚡ Auto-Reschedule All
+          </button>
+          <button data-defer-all style="background:#FFF; color:#475569; border:1px solid #CBD5E1; border-radius:6px; padding:6px 10px; font-size:12px; font-weight:500; cursor:pointer;">
+            🌅 Defer to Tomorrow
+          </button>
+          <button data-dismiss-banner style="background:transparent; color:#94A3B8; border:none; font-size:14px; cursor:pointer; padding:4px;" title="Dismiss notification">
+            ✕
+          </button>
+        </div>
+      `;
+
+      bannerEl.querySelector('[data-auto-reschedule-all]')?.addEventListener('click', async () => {
+        const startFrom = isToday ? Math.max(BOARD_START, currentDec) : BOARD_START;
+        await autoRescheduleBlocks(date, missedBlocks.map(b => b.id), startFrom, activeBufferMins / 60);
+        await loadBlocks();
+      });
+
+      bannerEl.querySelector('[data-defer-all]')?.addEventListener('click', async () => {
+        const tomorrow = getTomorrowKey(date);
+        await deferBlocksToDate(date, tomorrow, missedBlocks.map(b => b.id));
+        await loadBlocks();
+      });
+
+      bannerEl.querySelector('[data-dismiss-banner]')?.addEventListener('click', () => {
+        bannerDismissed = true;
+        bannerWrapper.style.display = 'none';
+      });
+    } else {
+      bannerWrapper.style.display = 'none';
     }
 
     // Sort normal blocks by start time, then duration
@@ -232,13 +486,102 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       }
     }
 
-    for (const b of infraBlocks) gridEl.appendChild(makeBlockEl(b));
-    for (const b of normalBlocks) gridEl.appendChild(makeBlockEl(b));
+    const mitData = await getMIT(date);
+    const mitTaskIds = mitData.taskIds || [];
+
+    for (const b of infraBlocks) gridEl.appendChild(makeBlockEl(b, mitTaskIds));
+    for (const b of normalBlocks) gridEl.appendChild(makeBlockEl(b, mitTaskIds));
+
+    // Render visual Rest Buffer Indicators in timeline gaps
+    gridEl.querySelectorAll('[data-buffer-indicator]').forEach(el => el.remove());
+    for (let i = 0; i < normalBlocks.length - 1; i++) {
+      const current = normalBlocks[i];
+      const next = normalBlocks[i + 1];
+      const gapMins = Math.round((next.start - current.end) * 60);
+
+      // If gap is 0 mins (back-to-back), show Tight Schedule alert & 1-click buffer fix button
+      if (gapMins === 0 && activeBufferMins > 0 && !current.completed && !next.completed) {
+        const topPx = hourToPx(next.start);
+        const alertEl = document.createElement('div');
+        alertEl.dataset.bufferIndicator = 'true';
+        alertEl.style.cssText = `
+          position: absolute;
+          top: ${topPx - 10}px;
+          left: 14px;
+          z-index: 25;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background: #FFFBEB;
+          border: 1px solid #FCD34D;
+          border-radius: 12px;
+          padding: 2px 8px;
+          font-size: 10px;
+          font-weight: 600;
+          color: #B45309;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        `;
+        alertEl.innerHTML = `
+          <span>⚠️ Tight Schedule</span>
+          <button data-add-gap-btn style="background:#D97706; color:#FFF; border:none; border-radius:8px; padding:1px 6px; font-size:9px; font-weight:700; cursor:pointer;">
+            ⚡ Add ${activeBufferMins}m Buffer
+          </button>
+        `;
+
+        alertEl.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+        });
+        alertEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+        });
+
+        alertEl.querySelector('[data-add-gap-btn]')?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          const shiftHours = activeBufferMins / 60;
+          next.start += shiftHours;
+          next.end += shiftHours;
+          await updateBlock(date, next.id, { start: next.start, end: next.end });
+          await loadBlocks();
+        });
+
+        gridEl.appendChild(alertEl);
+      }
+
+      // If gap is between 5 mins and 30 mins, render a subtle Rest Buffer Indicator
+      if (gapMins >= 5 && gapMins <= 30) {
+        const topPx = hourToPx(current.end);
+        const gapHeight = Math.max(16, hourToPx(next.start) - topPx);
+        
+        const bufEl = document.createElement('div');
+        bufEl.dataset.bufferIndicator = 'true';
+        bufEl.style.cssText = `
+          position: absolute;
+          top: ${topPx}px;
+          height: ${gapHeight}px;
+          left: 2px;
+          right: 2px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(241, 245, 249, 0.75);
+          border: 1px dashed #CBD5E1;
+          border-radius: 4px;
+          color: #64748B;
+          font-size: 10px;
+          font-weight: 600;
+          pointer-events: none;
+          z-index: 1;
+        `;
+        bufEl.innerHTML = `☕ ${gapMins}m Transition Rest`;
+        gridEl.appendChild(bufEl);
+      }
+    }
 
     gridEl.appendChild(nowLineEl); // keep now line on top
   }
 
-  function makeBlockEl(b) {
+  function makeBlockEl(b, mitTaskIds = []) {
     const top    = hourToPx(b.start);
     const height = Math.max(PX_PER_HOUR / 2, hourToPx(b.end) - hourToPx(b.start));
     const s      = getCategoryColor(b.cat);
@@ -247,6 +590,15 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
     const isRecur = b.isRecurring;
     const isDone  = !!b.completed;
     const icon = isRecur ? '<span style="font-size:10px; margin-right:4px;" title="Recurring">🔄</span>' : '';
+
+    const now = new Date();
+    const currentDec = now.getHours() + now.getMinutes() / 60;
+    const isToday = date === todayKey();
+    const isPastDate = date < todayKey();
+    const isMissed = !isDone && !isInfra && ((isToday && b.end <= currentDec) || isPastDate);
+
+    const missedBadge = isMissed ? '<span style="font-size:9px;font-weight:700;color:#E11D48;background:#FFE4E6;padding:1px 4px;border-radius:3px;margin-left:4px;border:1px solid #FDA4AF;">Missed</span>' : '';
+    const bumpBtnHtml = isMissed ? `<button data-bump-btn style="background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; border-radius:4px; font-size:10px; font-weight:600; padding:1px 6px; cursor:pointer; margin-left:6px;" title="Push to next free slot today">⏩ Bump</button>` : '';
 
     const el = document.createElement('div');
     el.dataset.block = b.id;
@@ -261,8 +613,8 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       top: ${top}px;
       height: ${height}px;
       left: ${leftCss}; ${rightCss} width: ${widthCss};
-      background: ${isDone ? '#f8fafc' : s.bg};
-      border-left: 4px solid ${isDone ? '#16A34A' : s.acc};
+      background: ${isDone ? '#f8fafc' : (isMissed ? '#FEF2F2' : s.bg)};
+      border-left: 4px solid ${isDone ? '#16A34A' : (isMissed ? '#E11D48' : s.acc)};
       color: ${isDone ? '#64748B' : s.txt};
       border-radius: 6px;
       overflow: hidden;
@@ -274,30 +626,65 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       transition: opacity 150ms, background 150ms;
       ${isInfra ? 'opacity: 0.75; filter: grayscale(0.2);' : ''}
       ${isDone ? 'opacity: 0.85;' : ''}
+      ${isMissed ? 'outline: 1px dashed #FCA5A5;' : ''}
     `;
     const isSmall = height < 35;
     const dragHandle = isInfra ? '' : `<div data-drag-handle style="position:absolute; left:2px; top:0; bottom:0; width:12px; display:flex; align-items:center; justify-content:center; cursor:grab; opacity:0.4; font-size:12px; font-weight:bold; color:${s.txt};" title="Drag to move slot">⋮</div>`;
     const resizeHandle = isInfra ? '' : `<div data-resize-handle style="position:absolute;bottom:0;left:0;right:0;height:7px;cursor:s-resize;"></div>`;
     
+    const isMIT = mitTaskIds.includes(b.id);
+    const mitStarBtnHtml = isInfra ? '' : `<button data-mit-star-btn style="background:none; border:none; padding:0 3px; cursor:pointer; font-size:13px; line-height:1; color:${isMIT ? '#4F46E5' : '#94A3B8'}; flex-shrink:0; vertical-align:middle;" title="${isMIT ? 'Remove from Top 3 MIT' : 'Add to Top 3 MIT'}">${isMIT ? '★' : '☆'}</button>`;
+
     const checkToggle = `<input type="checkbox" data-complete-toggle ${isDone ? 'checked' : ''} style="margin:0 5px 0 0; cursor:pointer; width:14px; height:14px; accent-color:#16A34A; flex-shrink:0; vertical-align:middle;" title="${isDone ? 'Mark as incomplete' : 'Mark as completed'}" />`;
     const textStyle = isDone ? 'text-decoration:line-through; opacity:0.75;' : '';
 
     el.innerHTML = isSmall ? `
       ${dragHandle}
       <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px;cursor:pointer;padding-right:8px;${isInfra ? 'margin-left:-12px;' : ''};${textStyle}">
-        ${checkToggle}${icon}${esc(b.title || 'Untitled')}
+        ${checkToggle}${mitStarBtnHtml}${icon}${esc(b.title || 'Untitled')}${missedBadge}${bumpBtnHtml}
         <span data-time-label style="font-size:9px;font-weight:normal;opacity:0.8;margin-left:4px;">(${formatHour(b.start)} – ${formatHour(b.end)})</span>
       </div>
       ${resizeHandle}
     ` : `
       ${dragHandle}
       <div style="display:flex; align-items:center; gap:2px; ${isInfra ? 'margin-left:-12px;' : ''}">
-        ${checkToggle}
-        <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;${textStyle}">${icon}${esc(b.title || 'Untitled')}</div>
+        ${checkToggle}${mitStarBtnHtml}
+        <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;cursor:pointer;${textStyle}">${icon}${esc(b.title || 'Untitled')} ${missedBadge}${bumpBtnHtml}</div>
       </div>
       <div data-time-label style="font-size:10px;opacity:0.75;margin-top:1px;cursor:pointer;${isInfra ? 'margin-left:-12px;' : ''}">${formatHour(b.start)} – ${formatHour(b.end)}</div>
       ${resizeHandle}
     `;
+
+    const mitStarBtn = el.querySelector('[data-mit-star-btn]');
+    if (mitStarBtn) {
+      mitStarBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const res = await toggleMITTask(date, b.id);
+        if (!res.success) {
+          await showAlert(res.message || 'You already have 3 MITs for today.', 'MIT Limit');
+        }
+        await loadBlocks();
+        if (typeof window.renderPriorityList === 'function') {
+          await window.renderPriorityList();
+        }
+      });
+    }
+
+    const bumpEl = el.querySelector('[data-bump-btn]');
+    if (bumpEl) {
+      bumpEl.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const startFrom = isToday ? Math.max(BOARD_START, currentDec) : BOARD_START;
+        const res = await autoRescheduleBlocks(date, [b.id], startFrom, activeBufferMins / 60);
+        if (res.rescheduledCount > 0) {
+          await loadBlocks();
+        } else {
+          // Show a non-blocking inline toast instead of a jarring alert()
+          showBumpFailToast(b, date);
+        }
+      });
+    }
 
     const chk = el.querySelector('[data-complete-toggle]');
     if (chk) {
@@ -340,6 +727,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
         block: b,
         el,
         startY,
+        startScroll: boardEl ? boardEl.scrollTop : 0,
         blockStart,
         duration,
         hasMoved: true
@@ -376,31 +764,82 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   gridEl.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-    if (e.target.closest('[data-block]')) return;
+    if (e.target.closest('[data-block]') || e.target.closest('[data-buffer-indicator]')) return;
     e.preventDefault();
     const startHour = getSlotStartHour(e);
     dragCreate = { startHour, endHour: startHour + 0.5, ghost: null, hasDragged: false };
   });
 
+  // Auto-scroll helper for drag operations
+  let autoScrollInterval = null;
+  let scrollSpeed = 0;
+
+  function updateAutoScroll(clientY) {
+    if (!boardEl) return;
+    const rect = boardEl.getBoundingClientRect();
+    const threshold = 50; // px from edge
+    const maxSpeed = 15; // px per tick
+
+    if (clientY < rect.top + threshold && clientY > rect.top - 50) {
+      scrollSpeed = -Math.max(2, Math.round(maxSpeed * (1 - Math.max(0, clientY - rect.top) / threshold)));
+    } else if (clientY > rect.bottom - threshold && clientY < rect.bottom + 50) {
+      scrollSpeed = Math.max(2, Math.round(maxSpeed * (1 - Math.max(0, rect.bottom - clientY) / threshold)));
+    } else {
+      scrollSpeed = 0;
+    }
+
+    if (scrollSpeed !== 0) {
+      if (!autoScrollInterval) {
+        autoScrollInterval = setInterval(() => {
+          if (scrollSpeed !== 0 && boardEl) {
+            boardEl.scrollTop += scrollSpeed;
+          }
+        }, 16);
+      }
+    } else {
+      stopAutoScroll();
+    }
+  }
+
+  function stopAutoScroll() {
+    scrollSpeed = 0;
+    if (autoScrollInterval) {
+      clearInterval(autoScrollInterval);
+      autoScrollInterval = null;
+    }
+  }
+
   // ── Drag & Drop tasks onto grid ─────────────────────────────────────────────
-  gridEl.addEventListener('dragover', (e) => {
+  boardEl.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
+    updateAutoScroll(e.clientY);
+  });
+
+  boardEl.addEventListener('dragleave', (e) => {
+    // If mouse left board bounds
+    const rect = boardEl.getBoundingClientRect();
+    if (e.clientY < rect.top || e.clientY > rect.bottom || e.clientX < rect.left || e.clientX > rect.right) {
+      stopAutoScroll();
+    }
   });
 
   gridEl.addEventListener('drop', async (e) => {
     e.preventDefault();
+    stopAutoScroll();
     try {
       const dataStr = e.dataTransfer.getData('text/plain');
       if (!dataStr) return;
       const taskData = JSON.parse(dataStr);
       if (!taskData || !taskData.title) return;
 
-      const startHour = getSlotStartHour(e);
-      
       // Snapping to estimate or defaulting to 1 hour
       const duration = taskData.timeEstimate ? Math.max(0.5, snapHour(taskData.timeEstimate / 60)) : 1.0;
-      const endHour = Math.min(BOARD_END, startHour + duration);
+      
+      let rawStartHour = getSlotStartHour(e);
+      // Ensure block doesn't overflow past midnight (BOARD_END)
+      const startHour = Math.max(BOARD_START, Math.min(BOARD_END - duration, rawStartHour));
+      const endHour = startHour + duration;
 
       // Map task category to timeboard categories
       let blockCat = getSelectedCat();
@@ -426,6 +865,10 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       await addBlock(date, newBlock);
       registerAlarm(newBlock, date);
       await loadBlocks();
+
+      if (typeof window.renderPriorityList === 'function') {
+        await window.renderPriorityList();
+      }
     } catch (err) {
       console.error('[Timeboard Drop] failed:', err);
     }
@@ -433,6 +876,10 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
   // ── Global mousemove / mouseup ──────────────────────────────────────────────
   function onMouseMove(e) {
+    if (dragCreate || dragResize || dragMove) {
+      updateAutoScroll(e.clientY);
+    }
+
     if (dragCreate) {
       const rawEnd = snapHour(clampH(pxToHour(getGridY(e))));
       const targetEnd = Math.max(dragCreate.startHour + 0.5, rawEnd);
@@ -471,7 +918,9 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 
     if (dragMove) {
       ignoreNextClick = true;
-      const deltaY = e.clientY - dragMove.startY;
+      const currentScroll = boardEl ? boardEl.scrollTop : 0;
+      const scrollDelta = currentScroll - dragMove.startScroll;
+      const deltaY = (e.clientY - dragMove.startY) + scrollDelta;
       const deltaHours = deltaY / PX_PER_HOUR;
       let newStart = snapHour(clampH(dragMove.blockStart + deltaHours));
       newStart = Math.max(BOARD_START, Math.min(BOARD_END - dragMove.duration, newStart));
@@ -492,6 +941,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   }
 
   async function onMouseUp() {
+    stopAutoScroll();
     document.body.style.userSelect = '';
 
     if (dragCreate) {
@@ -543,59 +993,26 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   document.addEventListener('mouseup',   onMouseUp);
 
   // ── Block modal ─────────────────────────────────────────────────────────────
-  const modal = buildBlockModal();
+  const modal = buildBlockModal(() => date);
   document.body.appendChild(modal.el);
 
   function openBlockModal(block, isNew) {
     modal.show(block, isNew, {
       onSave: async (updated, editMode) => {
-        if (isNew) {
-          if (updated.isRecurring) {
-            updated.recurrenceId = generateId();
-            const template = {
-              id: generateId(),
-              recurrenceId: updated.recurrenceId,
-              itemType: 'block',
-              startDate: date,
-              title: updated.title,
-              cat: updated.cat,
-              start: updated.start,
-              end: updated.end,
-              recurrencePattern: updated.recurrencePattern,
-              isInfrastructure: updated.isInfrastructure
-            };
-            await addRecurringTemplate(template);
-            
-            const endObj = new Date(date);
-            endObj.setDate(endObj.getDate() + 60);
-            const y = endObj.getFullYear();
-            const m = String(endObj.getMonth() + 1).padStart(2, '0');
-            const d = String(endObj.getDate()).padStart(2, '0');
-            await syncRecurringTemplateForRange(template, date, `${y}-${m}-${d}`);
-          } else {
-            await addBlock(date, updated);
+        await handleRecurringItemUpdate('block', isNew ? null : block, updated, date, editMode);
+        if (updated._isMITChecked) {
+          const res = await toggleMITTask(date, updated.id);
+          if (!res.success) {
+            await showAlert(res.message || 'You already have 3 MITs for today.', 'MIT Limit');
           }
-          registerAlarm(updated, date);
-        } else {
-          if (editMode === 'following') {
-            await updateFutureRecurringInstances(updated.recurrenceId, date, 'block', updated);
-            const templates = await getRecurringTemplates();
-            const t = templates.find(x => x.recurrenceId === updated.recurrenceId);
-            if (t) {
-              Object.assign(t, {
-                title: updated.title, cat: updated.cat, start: updated.start, end: updated.end,
-                recurrencePattern: updated.recurrencePattern, isInfrastructure: updated.isInfrastructure
-              });
-              await updateRecurringTemplate(t.id, t);
-            }
-          } else {
-            await updateBlock(date, updated.id, updated);
-          }
-          cancelAlarm(updated.id);
-          registerAlarm(updated, date);
         }
+        cancelAlarm(updated.id);
+        registerAlarm(updated, date);
         modal.hide();
         await loadBlocks();
+        if (typeof window.renderPriorityList === 'function') {
+          await window.renderPriorityList();
+        }
       },
       onDelete: async (editMode) => {
         if (editMode === 'following') {
@@ -615,17 +1032,26 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
             }
           }
         }
+        const mitData = await getMIT(date);
+        if ((mitData.taskIds || []).includes(block.id)) {
+          await toggleMITTask(date, block.id);
+        }
         cancelAlarm(block.id);
         modal.hide();
         await loadBlocks();
+        if (typeof window.renderPriorityList === 'function') {
+          await window.renderPriorityList();
+        }
       },
     });
   }
 
   // ── Storage ─────────────────────────────────────────────────────────────────
   async function loadBlocks() {
+    const prevScroll = boardEl ? boardEl.scrollTop : 0;
     blocks = await getBlocks(date);
-    renderBlocks();
+    await renderBlocks();
+    if (boardEl) boardEl.scrollTop = prevScroll;
   }
 
   // ── Scroll to now ────────────────────────────────────────────────────────────
@@ -639,6 +1065,10 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
   loadBlocks().then(() => {
     if (date === todayKey()) setTimeout(scrollToNow, 60);
   });
+
+  // Expose loadBlocks globally so the bump-fail toast can trigger a re-render
+  // without reloading the full page.
+  window._timeboardRefresh = () => loadBlocks();
 
   // ── Public API ────────────────────────────────────────────────────────────────
   return {
@@ -655,6 +1085,8 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
       document.removeEventListener('mouseup',   onMouseUp);
       if (modal.el.parentNode) modal.el.remove();
       containerEl.innerHTML = '';
+      // Clean up global reference
+      if (window._timeboardRefresh) delete window._timeboardRefresh;
     },
   };
 }
@@ -662,7 +1094,7 @@ export function mountTimeboard(containerEl, initialDate, opts = {}) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Block edit modal builder
 // ═══════════════════════════════════════════════════════════════════════════════
-function buildBlockModal() {
+function buildBlockModal(getBlockDate) {
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed; inset: 0;
@@ -747,11 +1179,15 @@ function buildBlockModal() {
             </label>
           </div>
         </div>
-        <!-- Completion Option -->
-        <div style="margin-top:4px; padding-top:10px; border-top:1px solid #E2E8F0;">
+        <!-- Completion & MIT Options -->
+        <div style="margin-top:4px; padding-top:10px; border-top:1px solid #E2E8F0; display:flex; flex-direction:column; gap:8px;">
           <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#1E293B;">
             <input type="checkbox" data-completed-toggle style="accent-color:#16A34A; width:15px; height:15px; cursor:pointer;" />
             Mark as completed ✓
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#4F46E5;">
+            <input type="checkbox" data-mit-toggle style="accent-color:#4F46E5; width:15px; height:15px; cursor:pointer;" />
+            ⭐ Add to Today's Top 3 (MIT)
           </label>
         </div>
       </div>
@@ -808,6 +1244,9 @@ function buildBlockModal() {
 
   const q = (sel) => overlay.querySelector(sel);
   
+  attachClockPicker(q('[data-start]'));
+  attachClockPicker(q('[data-end]'));
+
   const repeatToggle = q('[data-repeat-toggle]');
   const repeatSettings = q('[data-repeat-settings]');
   const repeatPattern = q('[data-repeat-pattern]');
@@ -850,7 +1289,7 @@ function buildBlockModal() {
   q('[data-btn-cancel]').addEventListener('click', hide);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) hide(); });
 
-  q('[data-btn-save]').addEventListener('click', () => {
+  q('[data-btn-save]').addEventListener('click', async () => {
     const title = titleInput.value.trim();
     if (!title) { titleInput.focus(); return; }
     const startStr = q('[data-start]').value;
@@ -866,27 +1305,56 @@ function buildBlockModal() {
     } : null;
     const isInfrastructure = isRoutine.checked;
     const completed = q('[data-completed-toggle]').checked;
+    const isMITChecked = q('[data-mit-toggle]').checked;
+
+    if (curBlock && curBlock.id && isMITChecked !== !!curBlock._wasMIT) {
+      const res = await toggleMITTask(date, curBlock.id);
+      if (!res.success && isMITChecked) {
+        await showAlert(res.message || 'You already have 3 MITs for today.', 'MIT Limit');
+      }
+    }
     
-    const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure, completed };
+    const updated = { ...curBlock, title, cat: selCat, start, end, isRecurring, recurrencePattern, isInfrastructure, completed, _isMITChecked: isMITChecked };
     
-    if (curBlock.isRecurring && curBlock.id && window.confirm("This is a recurring block.\n\nPress OK to apply changes to ALL FUTURE blocks in this series.\nPress Cancel to apply changes ONLY to this block.")) {
-      onSaveCb?.(updated, 'following');
-    } else if (curBlock.isRecurring && curBlock.id) {
-      onSaveCb?.(updated, 'only-this');
+    const isOrWasRecurring = !!curBlock?.isRecurring || isRecurring;
+    if (isOrWasRecurring && curBlock?.id) {
+      const choice = await showChoiceDialog({
+        title: 'Edit Recurring Block',
+        message: 'How would you like to apply your changes to this block?',
+        choices: [
+          { value: 'only-this', label: 'This block only', description: 'Changes affect only today\'s block.' },
+          { value: 'following', label: 'This and future blocks', description: 'Changes affect this and all future recurring blocks.' },
+          { value: 'all', label: 'All blocks (Template)', description: 'Changes template and updates all blocks.' }
+        ],
+        defaultChoice: 'following',
+        confirmText: 'Save Block'
+      });
+      if (!choice) return;
+      onSaveCb?.(updated, choice);
     } else {
-      onSaveCb?.(updated, 'only-this');
+      onSaveCb?.(updated, 'following');
     }
   });
 
-  q('[data-btn-delete]').addEventListener('click', () => { 
-    if (curBlock.isRecurring) {
-      if (window.confirm("Delete ALL FUTURE blocks in this series? (Cancel will delete only this one)")) {
-        onDeleteCb?.('following');
-      } else {
-        onDeleteCb?.('only-this');
-      }
+  q('[data-btn-delete]').addEventListener('click', async () => { 
+    if (curBlock?.isRecurring && curBlock?.id) {
+      const choice = await showChoiceDialog({
+        title: 'Delete Recurring Block',
+        message: 'This is a recurring block. Which instances would you like to delete?',
+        choices: [
+          { value: 'only-this', label: 'Delete this block only', description: 'Deletes only today\'s block.' },
+          { value: 'following', label: 'Delete this and all future blocks', description: 'Deletes this block and stops future recurrences.' }
+        ],
+        defaultChoice: 'following',
+        confirmText: 'Delete Block'
+      });
+      if (!choice) return;
+      onDeleteCb?.(choice);
     } else {
-      onDeleteCb?.('only-this'); 
+      const confirmed = await showConfirm('Are you sure you want to delete this block?', 'Delete Block');
+      if (confirmed) {
+        onDeleteCb?.('only-this'); 
+      }
     }
   });
 
@@ -915,6 +1383,12 @@ function buildBlockModal() {
     repeatCustom.style.display = repeatPattern.value === 'custom' ? 'flex' : 'none';
     isRoutine.checked = !!block.isInfrastructure;
     q('[data-completed-toggle]').checked = !!block.completed;
+
+    const activeDate = typeof getBlockDate === 'function' ? getBlockDate() : (typeof date !== 'undefined' ? date : todayKey());
+    const mitData = await getMIT(activeDate);
+    const isMIT = (mitData.taskIds || []).includes(block.id);
+    curBlock._wasMIT = isMIT;
+    q('[data-mit-toggle]').checked = isMIT;
     
     customDays.clear();
     overlay.querySelectorAll('.day-pill').forEach(btn => {

@@ -1,4 +1,6 @@
 import { get, set, todayKey, dateKey, generateId, getSettings } from './storage.js';
+import { showConfirm } from './dialog.js';
+import { attachClockPicker } from './clockPicker.js';
 
 /**
  * Update the streak logic
@@ -127,6 +129,7 @@ export async function mountNightNudge() {
   `;
   
   overlay.classList.add('active');
+  attachClockPicker(document.getElementById('nn-time'));
   
   document.getElementById('nn-cancel').addEventListener('click', () => {
     closeOverlay();
@@ -141,7 +144,8 @@ export async function mountNightNudge() {
     const tasks = [t1, t2, t3].filter(t => t).map(title => ({ title }));
     
     if (tasks.length === 0) {
-      if (!confirm("No tasks — are you sure?")) {
+      const confirmed = await showConfirm("No tasks listed — are you sure you want to save an empty plan?", "Empty Plan");
+      if (!confirmed) {
         return;
       }
     }
@@ -264,6 +268,7 @@ async function mountAdjustMode(overlay, dateStr, currentTasks, defaultTime) {
   `;
   
   overlay.classList.add('active');
+  attachClockPicker(document.getElementById('mp-time'));
   
   document.getElementById('mp-cancel-adjust').addEventListener('click', () => {
     closeOverlay();
@@ -277,7 +282,8 @@ async function mountAdjustMode(overlay, dateStr, currentTasks, defaultTime) {
     
     const tasks = [vt1, vt2, vt3].filter(t => t).map(title => ({ title }));
     if (tasks.length === 0) {
-      if (!confirm("No tasks — are you sure?")) return;
+      const confirmed = await showConfirm("No tasks listed — are you sure you want to save an empty plan?", "Empty Plan");
+      if (!confirmed) return;
     }
     
     const startTime = document.getElementById('mp-time').value;

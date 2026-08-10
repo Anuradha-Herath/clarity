@@ -19,14 +19,15 @@ import {
   carryForwardTasks,
   addRecurringTemplate, updateFutureRecurringInstances, removeFutureRecurringInstances,
   syncRecurringTemplateForRange, deleteRecurringTemplate, getRecurringTemplates,
-  autoGenerateRecurringInstances,
-  getHabits, saveHabits
+  autoGenerateRecurringInstances, handleRecurringItemUpdate,
+  getHabits, saveHabits,
+  getMIT, setMIT, toggleMITTask, getUserDisplayName, formatHour
 } from '../shared/storage.js';
 
 import { generateHabitInstances } from '../shared/habitEngine.js';
 
 import { mountTimeboard } from '../shared/timeboard.js';
-import { showConfirm, showAlert } from '../shared/dialog.js';
+import { showConfirm, showAlert, showChoiceDialog } from '../shared/dialog.js';
 import { getSriLankanHoliday } from '../shared/holidays.js';
 
 import {
@@ -716,8 +717,167 @@ categoryFilter.addEventListener('change', () => {
   renderPriorityList();
 });
 
+function showMITToast(message) {
+  const existing = document.querySelector('.mit-toast-notice');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'mit-toast-notice';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    if (toast.parentNode) toast.remove();
+  }, 3000);
+}
+
+async function renderTop3MITSection() {
+  const container = document.getElementById('top-3-mit-section');
+  if (!container) return;
+
+  const tasks = await getTasks(currentDate);
+  const mitData = await getMIT(currentDate);
+  const blocks = await getBlocks(currentDate);
+  const mitTaskIds = mitData.taskIds || [];
+
+  const mitItems = mitTaskIds
+    .map(id => {
+      const taskMatch = tasks.find(t => t.id === id);
+      if (taskMatch) return { id: taskMatch.id, title: taskMatch.title, done: taskMatch.done, type: 'task' };
+      const blockMatch = blocks.find(b => b.id === id);
+      if (blockMatch) return { id: blockMatch.id, title: blockMatch.title || 'Untitled', done: !!blockMatch.completed, type: 'block', start: blockMatch.start, end: blockMatch.end };
+      return null;
+    })
+    .filter(Boolean);
+
+  const completedCount = mitItems.filter(t => t.done).length;
+  const isAll3Completed = mitItems.length === 3 && completedCount === 3;
+
+  if (isAll3Completed) {
+    container.classList.add('all-completed');
+  } else {
+    container.classList.remove('all-completed');
+  }
+
+  const userName = await getUserDisplayName();
+  const headerText = isAll3Completed
+    ? `✓ Top 3 complete — great day, ${escHtml(userName)}!`
+    : `Today's Top 3`;
+  const subText = isAll3Completed
+    ? `You conquered your most important priorities today!`
+    : `Pick your 3 must-do tasks for today`;
+
+  const posIcons = ['①', '②', '③'];
+
+  let slotsHtml = '';
+  for (let i = 0; i < 3; i++) {
+    const t = mitItems[i];
+    const posBadge = posIcons[i];
+
+    if (t) {
+      let timeLabel = '';
+      if (t.type === 'block' && t.start !== undefined) {
+        timeLabel = `${formatHour(t.start)} – ${formatHour(t.end)}`;
+      } else {
+        const matchingBlock = blocks.find(b => !b.isInfrastructure && (b.title || '').trim().toLowerCase() === (t.title || '').trim().toLowerCase());
+        if (matchingBlock) {
+          timeLabel = `${formatHour(matchingBlock.start)} – ${formatHour(matchingBlock.end)}`;
+        }
+      }
+
+      slotsHtml += `
+        <div class="mit-slot-card filled ${t.done ? 'completed' : ''}" data-task-id="${t.id}" data-type="${t.type}" title="Right-click to remove from Top 3">
+          <span class="mit-pos-badge">${posBadge}</span>
+          <div class="mit-slot-content">
+            <span class="mit-task-title">${escHtml(t.title)}</span>
+            ${timeLabel ? `<span class="mit-task-time">⏰ ${escHtml(timeLabel)}</span>` : ''}
+          </div>
+          <input type="checkbox" class="mit-checkbox" data-task-id="${t.id}" data-type="${t.type}" ${t.done ? 'checked' : ''} title="${t.done ? 'Mark as incomplete' : 'Mark as completed'}" />
+        </div>
+      `;
+    } else {
+      const placeholderText = i === 0
+        ? 'Tap ☆ on any task or time block to mark as #1 priority'
+        : '————————————';
+      slotsHtml += `
+        <div class="mit-slot-card empty">
+          <span class="mit-pos-badge" style="opacity:0.4;">${posBadge}</span>
+          <div class="mit-slot-content">
+            <span class="mit-task-title" style="font-size:12px; font-weight:500; opacity:0.7;">${escHtml(placeholderText)}</span>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  container.innerHTML = `
+    <div class="mit-header-row">
+      <div class="mit-header-title">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+             fill="none" stroke="${isAll3Completed ? 'var(--color-success)' : 'var(--color-accent)'}" stroke-width="2.5"
+             stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+        </svg>
+        <span>${headerText}</span>
+      </div>
+      <span class="mit-header-sub">${subText}</span>
+    </div>
+    <div class="mit-slots-grid">
+      ${slotsHtml}
+    </div>
+  `;
+
+  container.querySelectorAll('.mit-checkbox').forEach(chk => {
+    chk.addEventListener('change', async (e) => {
+      e.stopPropagation();
+      const itemId = chk.dataset.taskId;
+      const itemType = chk.dataset.type;
+      const isDone = chk.checked;
+      if (itemType === 'block') {
+        await updateBlock(currentDate, itemId, { completed: isDone });
+      } else {
+        await updateTask(currentDate, itemId, { done: isDone });
+      }
+      await renderPriorityList();
+    });
+  });
+
+  container.querySelectorAll('.mit-slot-card.filled').forEach(card => {
+    const taskId = card.dataset.taskId;
+    const taskType = card.dataset.type;
+    card.setAttribute('draggable', 'true');
+
+    card.addEventListener('dragstart', (e) => {
+      e.stopPropagation();
+      const t = mitItems.find(item => item && item.id === taskId);
+      if (t) {
+        e.dataTransfer.setData('text/plain', JSON.stringify({
+          type: taskType === 'block' ? 'block' : 'main-task',
+          id: t.id,
+          title: t.title,
+          category: t.category || '',
+          timeEstimate: t.timeEstimate || null
+        }));
+        e.dataTransfer.effectAllowed = 'copyMove';
+      }
+    });
+
+    card.addEventListener('contextmenu', async (e) => {
+      e.preventDefault();
+      await toggleMITTask(currentDate, taskId);
+      await renderPriorityList();
+    });
+  });
+}
+
 async function renderPriorityList() {
   const tasks = await getTasks(currentDate);
+  const mitData = await getMIT(currentDate);
+  const mitTaskIds = mitData.taskIds || [];
+  const isMITFull = mitTaskIds.length >= 3;
+
+  await renderTop3MITSection();
+
   // Update progress card
   const { total: totalTasks, completed: completedTasks } = getTaskCompletionStats(tasks);
   updateDailyProgressCard(totalTasks, completedTasks);
@@ -801,9 +961,19 @@ async function renderPriorityList() {
         <div class="category-group-list" style="display: ${isCollapsed ? 'none' : 'block'};">
           ${catTasks.map((t) => {
             const isSubtaskExpanded = expandedSubtaskAdds.includes(t.id);
+            const isTaskMIT = mitTaskIds.includes(t.id) || !!t.isMIT;
+            const starTitle = isTaskMIT ? 'Remove from Top 3' : (isMITFull ? 'Top 3 full' : 'Mark as Top 3 MIT');
+            
             return `
               <div class="priority-item-container" style="border-bottom: 1px solid var(--color-border); padding: 7px 0; display: flex; flex-direction: column;">
                 <div class="priority-item" data-id="${t.id}" draggable="true" style="border-bottom: none; padding: 0; cursor: grab;">
+                  <button class="btn-mit-star ${isTaskMIT ? 'is-mit' : ''} ${!isTaskMIT && isMITFull ? 'is-disabled' : ''}" data-id="${t.id}" title="${starTitle}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                         fill="${isTaskMIT ? 'var(--color-accent)' : 'none'}" stroke="${isTaskMIT ? 'var(--color-accent)' : 'currentColor'}" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                    </svg>
+                  </button>
                   <input type="checkbox" class="priority-item-check" data-id="${t.id}" ${t.done ? 'checked' : ''} />
                   <div class="priority-dot" data-p="${t.priority ?? 3}" style="flex-shrink:0;"></div>
                   <span class="priority-item-title${t.done ? ' done-text' : ''}" data-id="${t.id}">${escHtml(t.title)}</span>
@@ -902,6 +1072,19 @@ async function renderPriorityList() {
   }
 
   priorityList.innerHTML = html;
+
+  // MIT Star button toggle handlers
+  priorityList.querySelectorAll('.btn-mit-star').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const taskId = btn.dataset.id;
+      const res = await toggleMITTask(currentDate, taskId);
+      if (!res.success) {
+        showMITToast(res.message || 'You already have 3 MITs for today. Complete or unmark one first.');
+      }
+      await renderPriorityList();
+    });
+  });
 
   // Restore focus to the quick add input if we just added a task to a category
   let categoryToFocus = activeFocusClass === 'category-quick-add-input' ? activeFocusData : lastAddedCategory;
@@ -1740,56 +1923,43 @@ async function saveTask() {
   const patch = { title, priority, timeEstimate, category, subtasks, linkedGoalId, isRecurring, recurrencePattern };
 
   if (editingTask) {
-    if (editingTask.habitId || editingTask.isRecurring) {
-      const titleChanged = title !== editingTask.title;
-      const priorityChanged = priority !== editingTask.priority;
-      const categoryChanged = category !== editingTask.category;
-      const estimateChanged = timeEstimate !== editingTask.timeEstimate;
-      const subtasksChanged = JSON.stringify(subtasks) !== JSON.stringify(editingTask.subtasks || []);
-      const goalChanged = linkedGoalId !== (editingTask.linkedGoalId || null);
-      const recurrenceChanged = isRecurring !== editingTask.isRecurring || JSON.stringify(recurrencePattern) !== JSON.stringify(editingTask.recurrencePattern || null);
-      const dateChanged = newDate !== targetDate;
-      
-      if (titleChanged || priorityChanged || categoryChanged || estimateChanged || subtasksChanged || goalChanged || recurrenceChanged || dateChanged) {
-        habitConfirmModalOverlay.classList.remove('hidden');
-        btnHabitConfirmSave.onclick = async () => {
-          const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
-          if (editingTask.habitId) {
-            await updateTask(targetDate, editingTask.id, patch, editMode);
-          } else if (editingTask.isRecurring) {
-            if (editMode === 'following') {
-              await updateFutureRecurringInstances(editingTask.recurrenceId, targetDate, 'task', patch);
-              const templates = await getRecurringTemplates();
-              const t = templates.find(x => x.recurrenceId === editingTask.recurrenceId);
-              if (t) {
-                Object.assign(t, patch);
-                await updateRecurringTemplate(t.id, t);
-              }
-            } else {
-              await updateTask(targetDate, editingTask.id, patch);
-            }
-          }
-          
-          if (newDate !== targetDate) {
-            const allTasks = await getTasks(targetDate);
-            const updatedTask = allTasks.find(t => t.id === editingTask.id);
-            if (updatedTask) {
-              await deleteTask(targetDate, editingTask.id);
-              await addTask(newDate, updatedTask);
-            }
-          }
-          
-          closeHabitConfirmModal();
-          closeTaskModal();
-          await refreshActiveTab();
-          try {
-            if (editingTask.habitId) await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' });
-          } catch (e) {}
-        };
-        return;
-      }
+    patch.id = editingTask.id;
+    patch.done = !!editingTask.done;
+    if (editingTask.recurrenceId) patch.recurrenceId = editingTask.recurrenceId;
+
+    const isOrWasRecurring = editingTask.isRecurring || isRecurring;
+
+    if (isOrWasRecurring && !editingTask.habitId) {
+      const recurrenceChoice = await showChoiceDialog({
+        title: 'Edit Recurring Task',
+        message: 'How would you like to apply your changes to this task?',
+        choices: [
+          { value: 'only-this', label: 'This task only', description: 'Changes affect only today\'s task.' },
+          { value: 'following', label: 'This and future tasks', description: 'Changes affect this and all future recurring tasks.' },
+          { value: 'all', label: 'All tasks (Template)', description: 'Changes template and updates all tasks.' }
+        ],
+        defaultChoice: 'following',
+        confirmText: 'Save Task'
+      });
+
+      if (!recurrenceChoice) return; // User cancelled
+
+      await handleRecurringItemUpdate('task', editingTask, patch, targetDate, recurrenceChoice);
+    } else if (editingTask.habitId) {
+      habitConfirmModalOverlay.classList.remove('hidden');
+      btnHabitConfirmSave.onclick = async () => {
+        const editMode = document.querySelector('input[name="habit-edit-mode"]:checked').value;
+        await updateTask(targetDate, editingTask.id, patch, editMode);
+        closeHabitConfirmModal();
+        closeTaskModal();
+        await refreshActiveTab();
+        try { await chrome.runtime.sendMessage({ type: 'SYNC_HABITS' }); } catch (e) {}
+      };
+      return;
+    } else {
+      await handleRecurringItemUpdate('task', editingTask, patch, targetDate, 'only-this');
     }
-    await updateTask(targetDate, editingTask.id, patch);
+
     if (newDate !== targetDate) {
       const allTasks = await getTasks(targetDate);
       const updatedTask = allTasks.find(t => t.id === editingTask.id);
@@ -1801,33 +1971,9 @@ async function saveTask() {
   } else {
     patch.id = generateId();
     patch.done = false;
-    
-    if (isRecurring) {
-      patch.recurrenceId = generateId();
-      const template = {
-        id: generateId(),
-        recurrenceId: patch.recurrenceId,
-        itemType: 'task',
-        startDate: newDate,
-        title: patch.title,
-        priority: patch.priority,
-        timeEstimate: patch.timeEstimate,
-        category: patch.category,
-        linkedGoalId: patch.linkedGoalId,
-        recurrencePattern: patch.recurrencePattern
-      };
-      await addRecurringTemplate(template);
-      
-      const endObj = new Date(newDate);
-      endObj.setDate(endObj.getDate() + 30);
-      const y = endObj.getFullYear();
-      const m = String(endObj.getMonth() + 1).padStart(2, '0');
-      const d = String(endObj.getDate()).padStart(2, '0');
-      await syncRecurringTemplateForRange(template, newDate, `${y}-${m}-${d}`);
-    } else {
-      await addTask(newDate, patch);
-    }
+    await handleRecurringItemUpdate('task', null, patch, newDate, 'following');
   }
+
   closeTaskModal();
   await refreshActiveTab();
 }
@@ -2112,11 +2258,47 @@ async function saveNotes() {
 //     WEEK TAB
 // ══════════════════════════════════════════════════════════
 
+let currentWeekViewMode = localStorage.getItem('clarity_week_view_mode') || 'timeline'; // 'timeline' or 'list'
+
 const weekGrid     = document.getElementById('week-grid');
 const weekNavTitle = document.getElementById('week-nav-title');
 const btnPrevWeek  = document.getElementById('btn-prev-week');
 const btnNextWeek  = document.getElementById('btn-next-week');
 const btnGoThisWeek = document.getElementById('btn-go-this-week');
+const btnWeekViewTimeline = document.getElementById('btn-week-view-timeline');
+const btnWeekViewList     = document.getElementById('btn-week-view-list');
+
+if (btnWeekViewTimeline && btnWeekViewList) {
+  btnWeekViewTimeline.addEventListener('click', () => {
+    currentWeekViewMode = 'timeline';
+    localStorage.setItem('clarity_week_view_mode', 'timeline');
+    updateWeekViewToggleUI();
+    renderWeekTab();
+  });
+
+  btnWeekViewList.addEventListener('click', () => {
+    currentWeekViewMode = 'list';
+    localStorage.setItem('clarity_week_view_mode', 'list');
+    updateWeekViewToggleUI();
+    renderWeekTab();
+  });
+}
+
+function updateWeekViewToggleUI() {
+  if (!btnWeekViewTimeline || !btnWeekViewList) return;
+  if (currentWeekViewMode === 'timeline') {
+    btnWeekViewTimeline.style.background = 'var(--color-accent)';
+    btnWeekViewTimeline.style.color = 'white';
+    btnWeekViewList.style.background = 'transparent';
+    btnWeekViewList.style.color = 'var(--color-text-muted)';
+  } else {
+    btnWeekViewList.style.background = 'var(--color-accent)';
+    btnWeekViewList.style.color = 'white';
+    btnWeekViewTimeline.style.background = 'transparent';
+    btnWeekViewTimeline.style.color = 'var(--color-text-muted)';
+  }
+}
+updateWeekViewToggleUI();
 
 btnPrevWeek.addEventListener('click', () => {
   const d = new Date(currentWeekStart + 'T12:00:00');
@@ -2137,7 +2319,15 @@ btnGoThisWeek.addEventListener('click', () => {
   renderWeekTab();
 });
 
-async function renderWeekTab() {
+async function renderWeekTab(preserveScroll = false) {
+  let savedScroll = null;
+  if (preserveScroll) {
+    const existingBody = weekGrid.querySelector('.week-timeline-body');
+    if (existingBody) {
+      savedScroll = existingBody.scrollTop;
+    }
+  }
+
   const dates   = getWeekDates(currentWeekStart);
   const lastDay = dates[6];
 
@@ -2150,9 +2340,10 @@ async function renderWeekTab() {
   const auth = await getAuth();
   const userId = auth?.localId || '';
 
-  // Load tasks and fixed events for all 7 days in parallel
-  const [tasksByDay, fixedEventsByDay] = await Promise.all([
+  // Load tasks, blocks (Day view scheduled time blocks), and fixed events for all 7 days in parallel
+  const [tasksByDay, blocksByDay, fixedEventsByDay] = await Promise.all([
     Promise.all(dates.map((d) => getTasks(d))),
+    Promise.all(dates.map((d) => getBlocks(d))),
     Promise.all(dates.map((d) => getFixedEventsForDate(userId, d)))
   ]);
 
@@ -2276,6 +2467,307 @@ async function renderWeekTab() {
     }
   }
 
+  if (currentWeekViewMode === 'timeline') {
+    weekGrid.style.display = 'block';
+    renderWeekTimelineView(dates, tasksByDay, blocksByDay, fixedEventsByDay, savedScroll);
+    return;
+  }
+
+  weekGrid.style.display = 'grid';
+  renderWeekListView(dates, tasksByDay, fixedEventsByDay);
+}
+
+function renderWeekTimelineView(dates, tasksByDay, blocksByDay, fixedEventsByDay, preserveScroll = null) {
+  const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  const container = document.createElement('div');
+  container.className = 'week-timeline-container';
+
+  // 1. Header Row
+  const headerRow = document.createElement('div');
+  headerRow.className = 'week-timeline-header-row';
+  
+  const tzCell = document.createElement('div');
+  tzCell.className = 'week-timeline-tz';
+  tzCell.textContent = 'GMT';
+  headerRow.appendChild(tzCell);
+
+  dates.forEach((date, i) => {
+    const isToday = date === TODAY;
+    const dateObj = new Date(date + 'T12:00:00');
+    const dateNum = dateObj.getDate();
+    const colHdr = document.createElement('div');
+    colHdr.className = `week-timeline-header-col${isToday ? ' is-today' : ''}`;
+    colHdr.dataset.date = date;
+    
+    let holidayEmoji = '';
+    if (showSlHolidays) {
+      const holiday = getSriLankanHoliday(date);
+      if (holiday) holidayEmoji = ` ${holiday.emoji}`;
+    }
+
+    colHdr.innerHTML = `
+      <div style="font-size: 11px; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase;">${DAY_LABELS[i]}</div>
+      <div style="font-size: 14px; font-weight: 700; color: ${isToday ? 'var(--color-accent)' : 'var(--color-text)'}; border-radius: 50%; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; ${isToday ? 'background: var(--color-accent); color: white;' : ''}">${dateNum}</div>
+      ${holidayEmoji ? `<span style="font-size: 10px;">${holidayEmoji}</span>` : ''}
+    `;
+    colHdr.addEventListener('click', () => {
+      currentDate = date;
+      goToDay(date);
+    });
+    headerRow.appendChild(colHdr);
+  });
+  container.appendChild(headerRow);
+
+  // 2. All-day / Unscheduled Tasks Row
+  const alldayRow = document.createElement('div');
+  alldayRow.className = 'week-timeline-allday-row';
+
+  const alldayLabel = document.createElement('div');
+  alldayLabel.className = 'week-timeline-allday-label';
+  alldayLabel.textContent = 'All Day / Tasks';
+  alldayRow.appendChild(alldayLabel);
+
+  dates.forEach((date, i) => {
+    const adCol = document.createElement('div');
+    adCol.className = 'week-timeline-allday-col';
+    
+    // Unscheduled tasks or all day fixed events
+    const dayTasks = tasksByDay[i] || [];
+    const dayFixed = fixedEventsByDay[i] || [];
+
+    const untimedTasks = dayTasks.filter(t => !t.time);
+    const untimedFixed = dayFixed.filter(e => !e.time);
+
+    untimedFixed.forEach(evt => {
+      const chip = document.createElement('div');
+      chip.style.cssText = 'font-size: 10px; background: rgba(59,130,246,0.12); border-left: 2px solid #3b82f6; padding: 2px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+      chip.textContent = `📌 ${evt.title}`;
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openFixedEventModal(evt, async () => refreshActiveTab(), async () => refreshActiveTab());
+      });
+      adCol.appendChild(chip);
+    });
+
+    untimedTasks.forEach(task => {
+      const chip = document.createElement('div');
+      chip.style.cssText = `font-size: 10px; background: var(--color-accent-soft); border-left: 2px solid var(--color-accent); padding: 2px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ${task.done ? 'text-decoration: line-through; opacity: 0.6;' : ''}`;
+      chip.textContent = `${task.done ? '✓ ' : ''}${task.title}`;
+      chip.title = task.title;
+      chip.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await updateTask(date, task.id, { done: !task.done });
+        renderWeekTab(true);
+      });
+      adCol.appendChild(chip);
+    });
+
+    alldayRow.appendChild(adCol);
+  });
+  container.appendChild(alldayRow);
+
+  // 3. Scrollable Timeline Body
+  const body = document.createElement('div');
+  body.className = 'week-timeline-body';
+
+  // Time Column (00:00 - 23:00)
+  const timeCol = document.createElement('div');
+  timeCol.className = 'week-timeline-time-col';
+  for (let h = 0; h < 24; h++) {
+    const lbl = document.createElement('div');
+    lbl.className = 'week-timeline-hour-label';
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    lbl.textContent = `${h12} ${ampm}`;
+    timeCol.appendChild(lbl);
+  }
+  body.appendChild(timeCol);
+
+  // 7 Day Columns
+  dates.forEach((date, i) => {
+    const dayCol = document.createElement('div');
+    dayCol.className = 'week-timeline-day-col';
+    dayCol.dataset.date = date;
+
+    // 24 Hour slot backgrounds
+    for (let h = 0; h < 24; h++) {
+      const slot = document.createElement('div');
+      slot.className = 'week-timeline-hour-slot';
+      slot.addEventListener('dblclick', () => {
+        const timeStr = `${String(h).padStart(2, '0')}:00`;
+        quickAddTaskWithTime(date, timeStr);
+      });
+      dayCol.appendChild(slot);
+    }
+
+    // Now line if today
+    if (date === TODAY) {
+      const now = new Date();
+      const currentMin = now.getHours() * 60 + now.getMinutes();
+      const topPx = (currentMin / 60) * 50; // 50px per hour
+      const nowLine = document.createElement('div');
+      nowLine.className = 'week-timeline-now-line';
+      nowLine.style.top = `${topPx}px`;
+      nowLine.style.left = '0';
+      nowLine.style.right = '0';
+      nowLine.innerHTML = `<div class="week-timeline-now-circle"></div>`;
+      dayCol.appendChild(nowLine);
+    }
+
+    // Collect all timed events, timeboard blocks (Day View schedule) & tasks for this day
+    const dayTasks = (tasksByDay[i] || []).filter(t => !!t.time);
+    const dayBlocks = blocksByDay[i] || [];
+    const dayFixed = (fixedEventsByDay[i] || []).filter(e => !!e.time);
+
+    const timedItems = [];
+
+    // Day View Timeboard Blocks
+    dayBlocks.forEach(b => {
+      const startMin = (b.start || 0) * 60;
+      const durationMin = ((b.end || 0) - (b.start || 0)) * 60;
+      if (durationMin > 0) {
+        const startH = Math.floor(b.start || 0);
+        const startM = Math.round(((b.start || 0) - startH) * 60);
+        const timeStr = `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}`;
+        timedItems.push({
+          type: 'block',
+          item: b,
+          startMin,
+          durationMin,
+          endMin: startMin + durationMin,
+          title: b.title || 'Scheduled Block',
+          done: b.done || false,
+          time: timeStr,
+          cat: b.cat
+        });
+      }
+    });
+
+    dayTasks.forEach(t => {
+      const [h, m] = t.time.split(':').map(Number);
+      const startMin = (h || 0) * 60 + (m || 0);
+      const durationMin = t.duration || 60;
+      timedItems.push({
+        type: 'task',
+        item: t,
+        startMin,
+        durationMin,
+        endMin: startMin + durationMin,
+        title: t.title,
+        done: t.done,
+        time: t.time
+      });
+    });
+
+    dayFixed.forEach(e => {
+      const [h, m] = e.time.split(':').map(Number);
+      const startMin = (h || 0) * 60 + (m || 0);
+      let durationMin = 60;
+      if (e.endTime) {
+        const [eh, em] = e.endTime.split(':').map(Number);
+        const endCalculated = (eh || 0) * 60 + (em || 0);
+        if (endCalculated > startMin) durationMin = endCalculated - startMin;
+      }
+      timedItems.push({
+        type: 'fixed',
+        item: e,
+        startMin,
+        durationMin,
+        endMin: startMin + durationMin,
+        title: e.title,
+        time: e.time,
+        eventType: e.type || 'appointment'
+      });
+    });
+
+    // Render timed items visually
+    timedItems.forEach(itm => {
+      const topPx = (itm.startMin / 60) * 50;
+      const heightPx = Math.max((itm.durationMin / 60) * 50, 32);
+
+      const el = document.createElement('div');
+      let classType = 'task-event';
+      if (itm.type === 'fixed') {
+        classType = `fixed-${itm.eventType}`;
+      } else if (itm.type === 'block') {
+        classType = 'task-event';
+      }
+
+      el.className = `week-timeline-event ${classType}${itm.done ? ' completed' : ''}`;
+      el.style.top = `${topPx}px`;
+      el.style.height = `${heightPx}px`;
+      el.style.left = '4px';
+      el.style.right = '4px';
+
+      const timeFmt = formatTimeStr(itm.time);
+      el.innerHTML = `
+        <div style="display: flex; flex-direction: column; height: 100%; justify-content: center; overflow: hidden;">
+          <div style="font-weight: 600; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2;">${itm.done ? '✓ ' : ''}${escHtml(itm.title)}</div>
+          <div style="font-size: 10px; opacity: 0.75; white-space: nowrap; line-height: 1.1; margin-top: 1px;">${timeFmt}</div>
+        </div>
+      `;
+
+      if (itm.type === 'task') {
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          openTaskModal(itm.item, date);
+        });
+      } else if (itm.type === 'block') {
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          // Find matching task for this block if available, or open task modal with prefilled title & time
+          openTaskModal({
+            id: itm.item.id,
+            title: itm.item.title,
+            time: itm.time,
+            category: itm.item.cat || 'Personal',
+            done: itm.item.done || false
+          }, date);
+        });
+      } else {
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          openFixedEventModal(itm.item, async () => refreshActiveTab(), async () => refreshActiveTab());
+        });
+      }
+
+      dayCol.appendChild(el);
+    });
+
+    body.appendChild(dayCol);
+  });
+
+  container.appendChild(body);
+  weekGrid.appendChild(container);
+
+  if (preserveScroll !== null) {
+    body.scrollTop = preserveScroll;
+  } else {
+    // Auto-scroll timeline body to current hour or 8 AM
+    setTimeout(() => {
+      const now = new Date();
+      const isCurrentWeek = dates.includes(TODAY);
+      const targetHour = Math.max(0, (isCurrentWeek ? now.getHours() : 8) - 1);
+      body.scrollTop = targetHour * 50;
+    }, 50);
+  }
+}
+
+async function quickAddTaskWithTime(date, timeStr) {
+  const title = prompt(`Add task for ${date} at ${formatTimeStr(timeStr)}:`);
+  if (!title || !title.trim()) return;
+  await addTask(date, {
+    title: title.trim(),
+    time: timeStr,
+    priority: 2,
+    done: false
+  });
+  renderWeekTab(true);
+}
+
+function renderWeekListView(dates, tasksByDay, fixedEventsByDay) {
+  weekGrid.innerHTML = '';
   const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   dates.forEach((date, i) => {
@@ -2329,7 +2821,6 @@ async function renderWeekTab() {
       const isMulti = event.isMultiDay || (event.endDate && event.endDate !== event.date);
       return !isMulti;
     });
-    
 
     dayFixedEvents.forEach(event => {
       const chip = document.createElement('div');
@@ -2360,43 +2851,6 @@ async function renderWeekTab() {
     col.querySelector('.week-col-header').addEventListener('click', () => {
       currentDate = date;
       goToDay(date);
-    });
-
-    // Drag-and-drop column listeners
-    col.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      col.classList.add('drag-over');
-    });
-
-    col.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      col.classList.add('drag-over');
-    });
-
-    col.addEventListener('dragleave', () => {
-      col.classList.remove('drag-over');
-    });
-
-    col.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      col.classList.remove('drag-over');
-      try {
-        const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-        if (data && data.id && data.sourceDate) {
-          const targetDate = date;
-          if (data.sourceDate === targetDate) return;
-
-          const sourceTasks = await getTasks(data.sourceDate);
-          const taskToMove = sourceTasks.find(t => t.id === data.id);
-          if (taskToMove) {
-            await deleteTask(data.sourceDate, data.id);
-            await addTask(targetDate, taskToMove);
-            renderWeekTab();
-          }
-        }
-      } catch (err) {
-        console.error('Drag and drop error:', err);
-      }
     });
 
     weekGrid.appendChild(col);
@@ -3511,6 +3965,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   const hasPlannerChanges = keys.some(key => 
     key.startsWith('blocks_') || 
     key.startsWith('tasks_') || 
+    key.startsWith('mit_') ||
     key.startsWith('notes_') || 
     key === 'notes' || 
     key === 'collapsed_categories' || 

@@ -370,6 +370,210 @@
   min-width: 700px;
 }
 
+/* Week Timeline View Styles */
+.week-timeline-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 500px;
+  overflow: hidden;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.week-timeline-header-row {
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.week-timeline-tz {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--color-border);
+}
+
+.week-timeline-header-col {
+  padding: 8px 4px;
+  text-align: center;
+  border-right: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.week-timeline-header-col:last-child {
+  border-right: none;
+}
+
+.week-timeline-header-col:hover {
+  background: var(--color-accent-soft);
+}
+
+.week-timeline-header-col.is-today {
+  background: var(--color-accent-soft);
+}
+
+.week-timeline-allday-row {
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-hover);
+  min-height: 38px;
+  max-height: 120px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.week-timeline-allday-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--color-border);
+  padding: 4px;
+}
+
+.week-timeline-allday-col {
+  padding: 4px;
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.week-timeline-allday-col:last-child {
+  border-right: none;
+}
+
+.week-timeline-body {
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr);
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
+
+.week-timeline-time-col {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  user-select: none;
+}
+
+.week-timeline-hour-label {
+  height: 50px;
+  box-sizing: border-box;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px dashed var(--color-border-subtle, rgba(0,0,0,0.05));
+}
+
+.week-timeline-day-col {
+  position: relative;
+  border-right: 1px solid var(--color-border);
+  height: 1200px; /* 24 hrs * 50px */
+}
+
+.week-timeline-day-col:last-child {
+  border-right: none;
+}
+
+.week-timeline-hour-slot {
+  height: 50px;
+  border-bottom: 1px solid var(--color-border-subtle, #e2e8f0);
+  box-sizing: border-box;
+}
+
+.week-timeline-hour-slot:nth-child(even) {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.week-timeline-now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #ef4444;
+  z-index: 8;
+  pointer-events: none;
+}
+
+.week-timeline-now-circle {
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.week-timeline-event {
+  position: absolute;
+  border-radius: 5px;
+  padding: 2px 6px;
+  font-size: 11px;
+  box-sizing: border-box;
+  overflow: hidden;
+  z-index: 5;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  line-height: 1.2;
+}
+
+.week-timeline-event:hover {
+  z-index: 9;
+  transform: scale(1.02);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.18);
+}
+
+.week-timeline-event.task-event {
+  background: var(--color-accent-soft);
+  border-left: 3px solid var(--color-accent);
+  color: var(--color-text);
+}
+
+.week-timeline-event.task-event.completed {
+  opacity: 0.65;
+  text-decoration: line-through;
+}
+
+.week-timeline-event.fixed-appointment {
+  background: rgba(59, 130, 246, 0.15);
+  border-left: 3px solid #3b82f6;
+  color: var(--color-text);
+}
+
+.week-timeline-event.fixed-deadline {
+  background: rgba(239, 68, 68, 0.15);
+  border-left: 3px solid #ef4444;
+  color: var(--color-text);
+}
+
+.week-timeline-event.fixed-event {
+  background: rgba(16, 185, 129, 0.15);
+  border-left: 3px solid #10b981;
+  color: var(--color-text);
+}
+
 .week-col {
   border-right: 1px solid var(--color-border);
   display: flex;
@@ -1658,6 +1862,188 @@
 .fixed-event-bar.reminder:hover {
   background-color: #fed7aa;
 }
+
+/* ── Most Important Tasks (MIT) — Top 3 for Today ────────────────── */
+.top-3-mit-section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  padding: 8px 14px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.top-3-mit-section.all-completed {
+  border-color: var(--color-success);
+  background: linear-gradient(135deg, var(--color-surface) 0%, var(--color-success-soft) 100%);
+}
+
+.mit-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.mit-header-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mit-header-sub {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.mit-slots-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .mit-slots-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mit-slot-card {
+  border-radius: var(--radius-card);
+  padding: 6px 10px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  transition: all var(--transition);
+  position: relative;
+}
+
+.mit-slot-card.empty {
+  border: 1.5px dashed var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+}
+
+.mit-slot-card.filled {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+.mit-slot-card.filled:hover {
+  border-color: var(--color-accent);
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.08);
+}
+
+.mit-slot-card.completed {
+  background: var(--color-success-soft);
+  border: 1px solid var(--color-success);
+}
+
+.mit-pos-badge {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.mit-slot-card.completed .mit-pos-badge {
+  color: var(--color-success);
+}
+
+.mit-slot-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mit-task-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mit-slot-card.completed .mit-task-title {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+}
+
+.mit-task-time {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.mit-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--color-success);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.btn-mit-star {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  border-radius: 4px;
+  transition: color var(--transition), transform var(--transition);
+  flex-shrink: 0;
+}
+
+.btn-mit-star:hover:not(.is-disabled) {
+  color: var(--color-accent);
+  transform: scale(1.15);
+}
+
+.btn-mit-star.is-mit {
+  color: var(--color-accent);
+}
+
+.btn-mit-star.is-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.mit-toast-notice {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #1E293B;
+  color: #FFF;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  z-index: 10000;
+  animation: fadeInOut 3s forwards;
+}
+
+@keyframes fadeInOut {
+  0% { opacity: 0; transform: translateY(10px); }
+  15% { opacity: 1; transform: translateY(0); }
+  85% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(10px); }
+}
+
 
 
 
